@@ -4,11 +4,25 @@ import {
   ChevronUp, ChevronDown, Trash2, Grid3X3,
   Layers, GripVertical, PaintBucket, Circle,
   Play, Pause, Film, Minus, Plus, Square,
+  Wand2, MousePointer, Spline, Lasso,
 } from 'lucide-react';
 import { processDither } from './utils/dither';
 import { processGlow } from './utils/glow';
 import { processHalftone } from './utils/halftone';
 import { processLego } from './utils/lego';
+import {
+  processGlitch, processChromatic, processPixelate, processBlur,
+  processNoise, processVHS, processBloom, processEmboss,
+  processPosterize, processDuotone,
+  GlitchSettings, ChromaticSettings, PixelateSettings, BlurSettings,
+  NoiseSettings, VHSSettings, BloomSettings, EmbossSettings,
+  PosterizeSettings, DuotoneSettings,
+} from './utils/effects';
+import {
+  AnchorPoint, PenPath, createAnchor, penPathToPath2D,
+  drawPenPathUI, hitTestPenPath, mirrorHandle, PenHitResult,
+} from './utils/penTool';
+import { magicWandSelect, smartObjectSelect } from './utils/smartSelect';
 import { cn } from './utils/cn';
 
 /* ─────────────────────────── Types ─────────────────────────── */
@@ -18,9 +32,15 @@ type BlendMode =
   | 'hard-light' | 'soft-light' | 'difference' | 'exclusion' | 'luminosity';
 
 type MediaKind = 'image' | 'video';
-type ToolMode = 'none' | 'brush' | 'erase' | 'select-rect' | 'select-ellipse';
+type ToolMode =
+  | 'none' | 'brush' | 'erase'
+  | 'select-rect' | 'select-ellipse'
+  | 'pen' | 'lasso' | 'magic-wand' | 'smart-object';
 type SelectionCombine = 'replace' | 'add' | 'subtract';
-type LayerType = 'dither' | 'glow' | 'halftone' | 'lego';
+type LayerType = 'dither' | 'glow' | 'halftone' | 'lego'
+  | 'glitch' | 'chromatic' | 'pixelate' | 'blur'
+  | 'noise' | 'vhs' | 'bloom' | 'emboss'
+  | 'posterize' | 'duotone';
 
 interface DitherSettings {
   pixelSize: number; matrixSize: number;
@@ -42,7 +62,10 @@ interface EffectLayer {
   id: string; name: string; type: LayerType;
   enabled: boolean; opacity: number; blendMode: BlendMode;
   useMask: boolean;
-  settings: DitherSettings | GlowSettings | HalftoneSettings | LegoSettings;
+  settings: DitherSettings | GlowSettings | HalftoneSettings | LegoSettings
+    | GlitchSettings | ChromaticSettings | PixelateSettings | BlurSettings
+    | NoiseSettings | VHSSettings | BloomSettings | EmbossSettings
+    | PosterizeSettings | DuotoneSettings;
 }
 interface SelectionShape {
   id: string; type: 'rect' | 'ellipse'; combine: SelectionCombine;
@@ -98,6 +121,76 @@ function defaultLego(): EffectLayer {
     id: uid(), name: 'LEGO', type: 'lego',
     enabled: true, opacity: 1, blendMode: 'source-over', useMask: false,
     settings: { brickSize: 16, saturation: 1.2, brightness: 5, studOpacity: 0.85, quantize: 16, borderWidth: 2 } as LegoSettings,
+  };
+}
+function defaultGlitch(): EffectLayer {
+  return {
+    id: uid(), name: 'Glitch', type: 'glitch',
+    enabled: true, opacity: 1, blendMode: 'source-over', useMask: false,
+    settings: { intensity: 0.5, bands: 12, rgbShift: 8, seed: 42 } as GlitchSettings,
+  };
+}
+function defaultChromatic(): EffectLayer {
+  return {
+    id: uid(), name: 'Chromatic', type: 'chromatic',
+    enabled: true, opacity: 1, blendMode: 'source-over', useMask: false,
+    settings: { offsetR: 6, offsetB: -6, radial: 0.7 } as ChromaticSettings,
+  };
+}
+function defaultPixelate(): EffectLayer {
+  return {
+    id: uid(), name: 'Pixelate', type: 'pixelate',
+    enabled: true, opacity: 1, blendMode: 'source-over', useMask: false,
+    settings: { blockSize: 8, shape: 'square' } as PixelateSettings,
+  };
+}
+function defaultBlur(): EffectLayer {
+  return {
+    id: uid(), name: 'Blur', type: 'blur',
+    enabled: true, opacity: 1, blendMode: 'source-over', useMask: false,
+    settings: { type: 'gaussian', radius: 6, angle: 0 } as BlurSettings,
+  };
+}
+function defaultNoise(): EffectLayer {
+  return {
+    id: uid(), name: 'Noise', type: 'noise',
+    enabled: true, opacity: 0.6, blendMode: 'overlay', useMask: false,
+    settings: { amount: 25, monochrome: true, blend: 'overlay' } as NoiseSettings,
+  };
+}
+function defaultVHS(): EffectLayer {
+  return {
+    id: uid(), name: 'VHS/CRT', type: 'vhs',
+    enabled: true, opacity: 1, blendMode: 'source-over', useMask: false,
+    settings: { scanlineOpacity: 0.15, scanlineWidth: 2, noise: 15, colorBleed: 6, warp: 0.01 } as VHSSettings,
+  };
+}
+function defaultBloom(): EffectLayer {
+  return {
+    id: uid(), name: 'Bloom', type: 'bloom',
+    enabled: true, opacity: 0.8, blendMode: 'screen', useMask: false,
+    settings: { radius: 20, intensity: 1.2, threshold: 140, softness: 0.5 } as BloomSettings,
+  };
+}
+function defaultEmboss(): EffectLayer {
+  return {
+    id: uid(), name: 'Emboss', type: 'emboss',
+    enabled: true, opacity: 1, blendMode: 'source-over', useMask: false,
+    settings: { type: 'edge', strength: 1.2, mix: 0 } as EmbossSettings,
+  };
+}
+function defaultPosterize(): EffectLayer {
+  return {
+    id: uid(), name: 'Posterize', type: 'posterize',
+    enabled: true, opacity: 1, blendMode: 'source-over', useMask: false,
+    settings: { levels: 6, gamma: 1 } as PosterizeSettings,
+  };
+}
+function defaultDuotone(): EffectLayer {
+  return {
+    id: uid(), name: 'Duotone', type: 'duotone',
+    enabled: true, opacity: 1, blendMode: 'source-over', useMask: false,
+    settings: { darkColor: '#0a0a2e', lightColor: '#ff6b35', contrast: 1.2 } as DuotoneSettings,
   };
 }
 
@@ -196,17 +289,15 @@ function Divider() {
   return <div className="border-t border-[#1a1a1a] my-3" />;
 }
 
-/* layer type colour dot (monochrome version — just grey shades) */
+const LAYER_COLORS: Record<LayerType, string> = {
+  dither: '#888', glow: '#bbb', halftone: '#666', lego: '#aaa',
+  glitch: '#f44', chromatic: '#c4f', pixelate: '#6bf', blur: '#8cf',
+  noise: '#999', vhs: '#f84', bloom: '#ff8', emboss: '#aab',
+  posterize: '#6e6', duotone: '#fa6',
+};
+
 function LayerDot({ type }: { type: LayerType }) {
-  return (
-    <span className={cn(
-      'w-1.5 h-1.5 rounded-full shrink-0',
-      type === 'dither'   ? 'bg-[#888]' :
-      type === 'glow'     ? 'bg-[#bbb]' :
-      type === 'halftone' ? 'bg-[#666]' :
-                            'bg-[#aaa]'
-    )} />
-  );
+  return <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: LAYER_COLORS[type] || '#888' }} />;
 }
 
 /* ─────────────────────────── App ─────────────────────────── */
@@ -230,13 +321,27 @@ export default function App() {
   const [selectionShapes, setSelectionShapes] = useState<SelectionShape[]>([]);
   const [draftSelection, setDraftSelection]   = useState<DraftSelection | null>(null);
 
+  // Pen tool state
+  const [penPath, setPenPath]             = useState<PenPath>({ id: uid(), points: [], closed: false });
+  const [penActiveIdx, setPenActiveIdx]   = useState<number | null>(null);
+  const [penDragInfo, setPenDragInfo]     = useState<PenHitResult>(null);
+  const [penHoverIdx, setPenHoverIdx]     = useState<number | null>(null);
+
+  // Lasso state
+  const [lassoPoints, setLassoPoints]     = useState<{x:number;y:number}[]>([]);
+
+  // Magic wand / smart settings
+  const [wandTolerance, setWandTolerance] = useState(32);
+  const [wandContiguous, setWandContiguous] = useState(true);
+  const [wandEdgeSmooth, setWandEdgeSmooth] = useState(1);
+  const [smartSensitivity, setSmartSensitivity] = useState(0.3);
+
   const [previewFps, setPreviewFps]       = useState(18);
   const [videoPlaying, setVideoPlaying]   = useState(false);
   const [videoDuration, setVideoDuration] = useState(0);
   const [videoCurrent, setVideoCurrent]   = useState(0);
   const [isRecording, setIsRecording]     = useState(false);
 
-  // Left sidebar section collapse state
   const [secTools, setSecTools]       = useState(true);
   const [secLayers, setSecLayers]     = useState(true);
   const [secInspect, setSecInspect]   = useState(true);
@@ -264,11 +369,21 @@ export default function App() {
   const layersRef    = useRef(layers);
   const selShapesRef = useRef(selectionShapes);
   const draftRef     = useRef(draftSelection);
+  const penPathRef   = useRef(penPath);
+  const penActiveRef = useRef(penActiveIdx);
+  const penHoverRef  = useRef(penHoverIdx);
+  const penDragRef   = useRef(penDragInfo);
+  const lassoRef     = useRef(lassoPoints);
 
   useEffect(() => { layersRef.current = layers; }, [layers]);
   useEffect(() => { selShapesRef.current = selectionShapes; }, [selectionShapes]);
   useEffect(() => { draftRef.current = draftSelection; }, [draftSelection]);
   useEffect(() => { fpsRef.current = previewFps; }, [previewFps]);
+  useEffect(() => { penPathRef.current = penPath; }, [penPath]);
+  useEffect(() => { penActiveRef.current = penActiveIdx; }, [penActiveIdx]);
+  useEffect(() => { penHoverRef.current = penHoverIdx; }, [penHoverIdx]);
+  useEffect(() => { penDragRef.current = penDragInfo; }, [penDragInfo]);
+  useEffect(() => { lassoRef.current = lassoPoints; }, [lassoPoints]);
 
   const selectedLayer = layers.find(l => l.id === selectedLayerId) ?? null;
   const hasSelection  = selectionShapes.length > 0;
@@ -345,6 +460,38 @@ export default function App() {
       ctx.restore();
       drawAnts(ds as SelectionShape, '#ccc');
     }
+
+    // Draw lasso points
+    const lassoPts = lassoRef.current;
+    if (lassoPts.length > 1) {
+      ctx.save();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1.2;
+      ctx.setLineDash([4, 4]);
+      ctx.lineDashOffset = -antsRef.current;
+      ctx.beginPath();
+      ctx.moveTo(lassoPts[0].x, lassoPts[0].y);
+      for (let i = 1; i < lassoPts.length; i++) ctx.lineTo(lassoPts[i].x, lassoPts[i].y);
+      ctx.stroke();
+      // Show closing line ghost
+      ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+      ctx.beginPath();
+      ctx.moveTo(lassoPts[lassoPts.length - 1].x, lassoPts[lassoPts.length - 1].y);
+      ctx.lineTo(lassoPts[0].x, lassoPts[0].y);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Draw pen path
+    const pp = penPathRef.current;
+    if (pp.points.length > 0) {
+      const dispCanvas = displayRef.current;
+      const scaleX = dispCanvas && dispCanvas.clientWidth > 0 ? W / dispCanvas.clientWidth : 1;
+      drawPenPathUI(ctx, pp, penActiveRef.current, penHoverRef.current, 1 / scaleX);
+    }
+
+    // Draw magic wand / smart crosshair if those tools are active
+    // (no extra overlay needed — selection mask handles it)
   }, []);
 
   /* ── composite ── */
@@ -371,7 +518,6 @@ export default function App() {
       temp.globalAlpha = 1;
       temp.drawImage(d.effect, 0, 0);
 
-      // alpha-aware: clip effect to source alpha
       temp.globalCompositeOperation = 'destination-in';
       temp.drawImage(src, 0, 0);
 
@@ -421,6 +567,26 @@ export default function App() {
     } else if (layer.type === 'lego') {
       const s = layer.settings as LegoSettings;
       ctx.drawImage(processLego(src, s.brickSize, s.saturation, s.brightness, s.studOpacity, s.quantize, s.borderWidth), 0, 0);
+    } else if (layer.type === 'glitch') {
+      ctx.drawImage(processGlitch(src, layer.settings as GlitchSettings), 0, 0);
+    } else if (layer.type === 'chromatic') {
+      ctx.drawImage(processChromatic(src, layer.settings as ChromaticSettings), 0, 0);
+    } else if (layer.type === 'pixelate') {
+      ctx.drawImage(processPixelate(src, layer.settings as PixelateSettings), 0, 0);
+    } else if (layer.type === 'blur') {
+      ctx.drawImage(processBlur(src, layer.settings as BlurSettings), 0, 0);
+    } else if (layer.type === 'noise') {
+      ctx.drawImage(processNoise(src, layer.settings as NoiseSettings), 0, 0);
+    } else if (layer.type === 'vhs') {
+      ctx.drawImage(processVHS(src, layer.settings as VHSSettings), 0, 0);
+    } else if (layer.type === 'bloom') {
+      ctx.drawImage(processBloom(src, layer.settings as BloomSettings), 0, 0);
+    } else if (layer.type === 'emboss') {
+      ctx.drawImage(processEmboss(src, layer.settings as EmbossSettings), 0, 0);
+    } else if (layer.type === 'posterize') {
+      ctx.drawImage(processPosterize(src, layer.settings as PosterizeSettings), 0, 0);
+    } else if (layer.type === 'duotone') {
+      ctx.drawImage(processDuotone(src, layer.settings as DuotoneSettings), 0, 0);
     }
   }, [ensureLayerBuffers]);
 
@@ -485,6 +651,8 @@ export default function App() {
     clearSelMask();
     setSelectionShapes([]); selShapesRef.current = [];
     setDraftSelection(null); draftRef.current = null;
+    setPenPath({ id: uid(), points: [], closed: false });
+    setLassoPoints([]);
 
     if (layersRef.current.length === 0) {
       const base = defaultDither();
@@ -570,7 +738,7 @@ export default function App() {
   }, [ensureLayerBuffers, layers, regenerateAll, sourceReady]);
 
   /* ── overlay refresh ── */
-  useEffect(() => { redrawOverlay(); }, [draftSelection, redrawOverlay, selectionShapes, sourceReady, tool]);
+  useEffect(() => { redrawOverlay(); }, [draftSelection, redrawOverlay, selectionShapes, sourceReady, tool, penPath, penActiveIdx, penHoverIdx, lassoPoints]);
 
   /* ── marching ants animation ── */
   useEffect(() => {
@@ -590,7 +758,13 @@ export default function App() {
 
   /* ─── layer management ─── */
   const addLayer = (type: LayerType) => {
-    const l = type === 'dither' ? defaultDither() : type === 'glow' ? defaultGlow() : type === 'halftone' ? defaultHalftone() : defaultLego();
+    const factories: Record<LayerType, () => EffectLayer> = {
+      dither: defaultDither, glow: defaultGlow, halftone: defaultHalftone, lego: defaultLego,
+      glitch: defaultGlitch, chromatic: defaultChromatic, pixelate: defaultPixelate, blur: defaultBlur,
+      noise: defaultNoise, vhs: defaultVHS, bloom: defaultBloom, emboss: defaultEmboss,
+      posterize: defaultPosterize, duotone: defaultDuotone,
+    };
+    const l = (factories[type] || defaultDither)();
     setLayers(prev => [...prev, l]);
     setSelectedLayerId(l.id);
   };
@@ -625,6 +799,9 @@ export default function App() {
   const chooseTool = (next: ToolMode) => {
     setTool(next);
     if ((next === 'brush' || next === 'erase') && selectedLayerId) patchLayer(selectedLayerId, { useMask: true });
+    // When switching away from pen, keep the path
+    // When switching away from lasso, clear it
+    if (next !== 'lasso' && lassoPoints.length > 0) setLassoPoints([]);
   };
 
   const clearMask = () => {
@@ -677,6 +854,58 @@ export default function App() {
     setSelectionShapes(next); selShapesRef.current = next;
   };
 
+  /* ── Apply canvas mask to selection ── */
+  const applyMaskCanvasToSelection = useCallback((maskCanvas: HTMLCanvasElement, combine: SelectionCombine) => {
+    const canvas = selMaskRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    if (combine === 'replace') ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.globalCompositeOperation = combine === 'subtract' ? 'destination-out' : 'source-over';
+    ctx.drawImage(maskCanvas, 0, 0);
+    ctx.restore();
+    ctx.globalCompositeOperation = 'source-over';
+    // Create a bounding shape for ants
+    const shape: SelectionShape = { id: uid(), type: 'rect', combine, x: 0, y: 0, w: canvas.width, h: canvas.height };
+    const next = combine === 'replace' ? [shape] : [...selShapesRef.current, shape];
+    setSelectionShapes(next); selShapesRef.current = next;
+    redrawOverlay();
+  }, [redrawOverlay]);
+
+  /* ── Pen path to selection ── */
+  const penPathToSelection = useCallback(() => {
+    const pp = penPathRef.current;
+    if (pp.points.length < 3 || !pp.closed) return;
+    const W = origRef.current.width, H = origRef.current.height;
+    if (!W || !H) return;
+    const tmpCanvas = document.createElement('canvas');
+    tmpCanvas.width = W; tmpCanvas.height = H;
+    const ctx = tmpCanvas.getContext('2d')!;
+    ctx.fillStyle = 'white';
+    const path2d = penPathToPath2D(pp);
+    ctx.fill(path2d);
+    applyMaskCanvasToSelection(tmpCanvas, selectionMode);
+  }, [applyMaskCanvasToSelection, selectionMode]);
+
+  /* ── Lasso to selection ── */
+  const lassoToSelection = useCallback(() => {
+    const pts = lassoRef.current;
+    if (pts.length < 3) return;
+    const W = origRef.current.width, H = origRef.current.height;
+    if (!W || !H) return;
+    const tmpCanvas = document.createElement('canvas');
+    tmpCanvas.width = W; tmpCanvas.height = H;
+    const ctx = tmpCanvas.getContext('2d')!;
+    ctx.fillStyle = 'white';
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.closePath();
+    ctx.fill();
+    applyMaskCanvasToSelection(tmpCanvas, selectionMode);
+    setLassoPoints([]); lassoRef.current = [];
+  }, [applyMaskCanvasToSelection, selectionMode]);
+
   const applySelToMask = (mode: 'replace' | 'add' | 'subtract') => {
     if (!selectedLayerId || !hasSelection) return;
     const d = ensureLayerBuffers(selectedLayerId);
@@ -719,11 +948,128 @@ export default function App() {
     composite();
   };
 
+  /* ── Pen Tool pointer handlers ── */
+  const handlePenPointerDown = (pt: { x: number; y: number }, e: React.PointerEvent<HTMLCanvasElement>) => {
+    const pp = penPathRef.current;
+    const canvasW = origRef.current.width;
+    const dispEl = displayRef.current;
+    const pxThreshold = dispEl && dispEl.clientWidth > 0 ? (10 * canvasW / dispEl.clientWidth) : 10;
+
+    const hit = hitTestPenPath(pp, pt.x, pt.y, pxThreshold);
+
+    if (hit) {
+      if (hit.type === 'close') {
+        // Close the path
+        const closed = { ...pp, closed: true };
+        setPenPath(closed); penPathRef.current = closed;
+        setPenActiveIdx(0);
+        return;
+      }
+      // Start dragging anchor or handle
+      setPenDragInfo(hit); penDragRef.current = hit;
+      if (hit.type === 'anchor') setPenActiveIdx(hit.idx);
+      e.currentTarget.setPointerCapture(e.pointerId);
+      return;
+    }
+
+    if (pp.closed) {
+      // Path is closed — start a new path
+      const newPath: PenPath = { id: uid(), points: [createAnchor(pt.x, pt.y)], closed: false };
+      setPenPath(newPath); penPathRef.current = newPath;
+      setPenActiveIdx(0);
+      // Start dragging to create cpOut
+      setPenDragInfo({ type: 'cpOut', idx: 0 }); penDragRef.current = { type: 'cpOut', idx: 0 };
+      e.currentTarget.setPointerCapture(e.pointerId);
+      return;
+    }
+
+    // Add new point
+    const newPt = createAnchor(pt.x, pt.y);
+    const newPts = [...pp.points, newPt];
+    const newPath: PenPath = { ...pp, points: newPts };
+    const newIdx = newPts.length - 1;
+    setPenPath(newPath); penPathRef.current = newPath;
+    setPenActiveIdx(newIdx);
+    // Start drag to set cpOut handle
+    setPenDragInfo({ type: 'cpOut', idx: newIdx }); penDragRef.current = { type: 'cpOut', idx: newIdx };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const handlePenPointerMove = (pt: { x: number; y: number }) => {
+    const di = penDragRef.current;
+    const pp = penPathRef.current;
+
+    if (!di) {
+      // Hover detection
+      const canvasW = origRef.current.width;
+      const dispEl = displayRef.current;
+      const pxThreshold = dispEl && dispEl.clientWidth > 0 ? (10 * canvasW / dispEl.clientWidth) : 10;
+      const hit = hitTestPenPath(pp, pt.x, pt.y, pxThreshold);
+      const newHover = hit && hit.type === 'anchor' ? hit.idx : null;
+      if (newHover !== penHoverRef.current) { setPenHoverIdx(newHover); penHoverRef.current = newHover; }
+      return;
+    }
+
+    const pts = [...pp.points];
+
+    if (di.type === 'anchor') {
+      const ap = pts[di.idx];
+      pts[di.idx] = { ...ap, x: pt.x, y: pt.y };
+    } else if (di.type === 'cpOut') {
+      const ap = pts[di.idx];
+      const newCp = { x: pt.x - ap.x, y: pt.y - ap.y };
+      let updated = { ...ap, cpOut: newCp };
+      updated = mirrorHandle(updated, 'cpOut');
+      pts[di.idx] = updated;
+    } else if (di.type === 'cpIn') {
+      const ap = pts[di.idx];
+      const newCp = { x: pt.x - ap.x, y: pt.y - ap.y };
+      let updated = { ...ap, cpIn: newCp };
+      updated = mirrorHandle(updated, 'cpIn');
+      pts[di.idx] = updated;
+    }
+
+    const newPath = { ...pp, points: pts };
+    setPenPath(newPath); penPathRef.current = newPath;
+  };
+
+  const handlePenPointerUp = () => {
+    setPenDragInfo(null); penDragRef.current = null;
+  };
+
+  /* ── Main pointer handlers ── */
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!sourceReady) return;
     const pt = getCanvasPt(e);
     lastPtRef.current = pt;
     setIsPointerActive(true);
+
+    if (tool === 'pen') {
+      handlePenPointerDown(pt, e);
+      return;
+    }
+
+    if (tool === 'lasso') {
+      setLassoPoints([pt]);
+      lassoRef.current = [pt];
+      e.currentTarget.setPointerCapture(e.pointerId);
+      return;
+    }
+
+    if (tool === 'magic-wand') {
+      const result = magicWandSelect(origRef.current, pt.x, pt.y, wandTolerance, wandContiguous, wandEdgeSmooth);
+      applyMaskCanvasToSelection(result, selectionMode);
+      setIsPointerActive(false);
+      return;
+    }
+
+    if (tool === 'smart-object') {
+      const result = smartObjectSelect(origRef.current, pt.x, pt.y, smartSensitivity);
+      applyMaskCanvasToSelection(result, selectionMode);
+      setIsPointerActive(false);
+      return;
+    }
+
     e.currentTarget.setPointerCapture(e.pointerId);
     if (tool === 'brush' || tool === 'erase') { if (canPaint) paintLine(pt, pt); return; }
     if (tool === 'select-rect' || tool === 'select-ellipse') {
@@ -732,8 +1078,21 @@ export default function App() {
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!isPointerActive) return;
     const pt = getCanvasPt(e);
+
+    if (tool === 'pen') {
+      handlePenPointerMove(pt);
+      if (penDragRef.current) return; // don't do other processing while dragging pen handle
+    }
+
+    if (!isPointerActive && tool !== 'pen') return;
+
+    if (tool === 'lasso' && isPointerActive) {
+      const newPts = [...lassoRef.current, pt];
+      setLassoPoints(newPts); lassoRef.current = newPts;
+      return;
+    }
+
     if ((tool === 'brush' || tool === 'erase') && canPaint) {
       if (lastPtRef.current) paintLine(lastPtRef.current, pt);
       lastPtRef.current = pt; return;
@@ -745,6 +1104,19 @@ export default function App() {
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (tool === 'pen') {
+      handlePenPointerUp();
+      setIsPointerActive(false);
+      return;
+    }
+
+    if (tool === 'lasso' && isPointerActive) {
+      lassoToSelection();
+      setIsPointerActive(false);
+      try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
+      return;
+    }
+
     setIsPointerActive(false);
     const ad = draftRef.current;
     if ((tool === 'select-rect' || tool === 'select-ellipse') && ad) {
@@ -753,6 +1125,47 @@ export default function App() {
     lastPtRef.current = null;
     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
   };
+
+  /* ── Keyboard: delete pen anchor, Escape, Enter ── */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (tool === 'pen' && penActiveRef.current !== null) {
+          const pp = penPathRef.current;
+          const idx = penActiveRef.current;
+          if (pp.points.length > 0) {
+            const newPts = pp.points.filter((_: AnchorPoint, i: number) => i !== idx);
+            const newPath = { ...pp, points: newPts, closed: newPts.length < 3 ? false : pp.closed };
+            setPenPath(newPath); penPathRef.current = newPath;
+            setPenActiveIdx(newPts.length > 0 ? Math.min(idx, newPts.length - 1) : null);
+          }
+          e.preventDefault();
+        }
+      }
+      if (e.key === 'Escape') {
+        if (tool === 'pen') {
+          setPenPath({ id: uid(), points: [], closed: false }); penPathRef.current = { id: uid(), points: [], closed: false };
+          setPenActiveIdx(null);
+        }
+        if (tool === 'lasso') {
+          setLassoPoints([]); lassoRef.current = [];
+        }
+        clearSelection();
+      }
+      if (e.key === 'Enter') {
+        if (tool === 'pen' && penPathRef.current.points.length >= 3) {
+          // Close and make selection
+          if (!penPathRef.current.closed) {
+            const closed = { ...penPathRef.current, closed: true };
+            setPenPath(closed); penPathRef.current = closed;
+          }
+          penPathToSelection();
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [tool, clearSelection, penPathToSelection, lassoToSelection]);
 
   /* ── drag & drop layers ── */
   const handleDragStart = (e: React.DragEvent, id: string) => { setDragId(id); e.dataTransfer.effectAllowed = 'move'; };
@@ -826,13 +1239,27 @@ export default function App() {
   };
 
   /* ── derived ── */
-  const dither   = selectedLayer?.type === 'dither'   ? selectedLayer.settings as DitherSettings   : null;
-  const glow     = selectedLayer?.type === 'glow'     ? selectedLayer.settings as GlowSettings     : null;
-  const halftone = selectedLayer?.type === 'halftone' ? selectedLayer.settings as HalftoneSettings : null;
-  const lego     = selectedLayer?.type === 'lego'     ? selectedLayer.settings as LegoSettings     : null;
+  const dither     = selectedLayer?.type === 'dither'     ? selectedLayer.settings as DitherSettings     : null;
+  const glow       = selectedLayer?.type === 'glow'       ? selectedLayer.settings as GlowSettings       : null;
+  const halftone   = selectedLayer?.type === 'halftone'   ? selectedLayer.settings as HalftoneSettings   : null;
+  const lego       = selectedLayer?.type === 'lego'       ? selectedLayer.settings as LegoSettings       : null;
+  const glitchS    = selectedLayer?.type === 'glitch'     ? selectedLayer.settings as GlitchSettings     : null;
+  const chromaticS = selectedLayer?.type === 'chromatic'  ? selectedLayer.settings as ChromaticSettings  : null;
+  const pixelateS  = selectedLayer?.type === 'pixelate'   ? selectedLayer.settings as PixelateSettings   : null;
+  const blurS      = selectedLayer?.type === 'blur'       ? selectedLayer.settings as BlurSettings       : null;
+  const noiseS     = selectedLayer?.type === 'noise'      ? selectedLayer.settings as NoiseSettings      : null;
+  const vhsS       = selectedLayer?.type === 'vhs'        ? selectedLayer.settings as VHSSettings        : null;
+  const bloomS     = selectedLayer?.type === 'bloom'      ? selectedLayer.settings as BloomSettings      : null;
+  const embossS    = selectedLayer?.type === 'emboss'     ? selectedLayer.settings as EmbossSettings     : null;
+  const posterizeS = selectedLayer?.type === 'posterize'  ? selectedLayer.settings as PosterizeSettings  : null;
+  const duotoneS   = selectedLayer?.type === 'duotone'    ? selectedLayer.settings as DuotoneSettings    : null;
 
   const cursor = tool === 'brush' || tool === 'erase' ? 'crosshair'
-               : tool === 'select-rect' || tool === 'select-ellipse' ? 'cell' : 'default';
+               : tool === 'select-rect' || tool === 'select-ellipse' ? 'cell'
+               : tool === 'pen' ? 'crosshair'
+               : tool === 'lasso' ? 'crosshair'
+               : tool === 'magic-wand' || tool === 'smart-object' ? 'crosshair'
+               : 'default';
 
   /* ── render ── */
   return (
@@ -914,10 +1341,13 @@ export default function App() {
               Tools {secTools ? <Minus size={11} /> : <Plus size={11} />}
             </button>
             {secTools && (
-              <div className="px-4 pb-3 space-y-1.5">
-                <div className="grid grid-cols-2 gap-1.5">
+              <div className="px-4 pb-3 space-y-2 fade-in">
+
+                {/* Row 1: View / Brush / Erase */}
+                <SectionLabel>Paint</SectionLabel>
+                <div className="grid grid-cols-3 gap-1.5">
                   <ToolBtn active={tool === 'none'} onClick={() => chooseTool('none')} label="View">
-                    <Square size={12} />
+                    <MousePointer size={12} />
                   </ToolBtn>
                   <ToolBtn active={tool === 'brush'} onClick={() => chooseTool('brush')} label="Brush">
                     <Pen size={12} />
@@ -925,24 +1355,94 @@ export default function App() {
                   <ToolBtn active={tool === 'erase'} onClick={() => chooseTool('erase')} label="Erase">
                     <Eraser size={12} />
                   </ToolBtn>
-                  <ToolBtn active={tool === 'select-rect'} onClick={() => chooseTool('select-rect')} label="Rect Sel">
-                    <Grid3X3 size={12} />
-                  </ToolBtn>
-                  <div className="col-span-2">
-                    <ToolBtn active={tool === 'select-ellipse'} onClick={() => chooseTool('select-ellipse')} label="Ellipse Sel">
-                      <Circle size={12} />
-                    </ToolBtn>
-                  </div>
                 </div>
 
-                <SliderRow label="Brush size" value={brushSize} min={4} max={320} step={1} display={`${brushSize}px`} onChange={setBrushSize} />
+                {(tool === 'brush' || tool === 'erase') && (
+                  <SliderRow label="Brush size" value={brushSize} min={4} max={320} step={1} display={`${brushSize}px`} onChange={setBrushSize} />
+                )}
+
+                <Divider />
+
+                {/* Row 2: Selection tools */}
+                <SectionLabel>Select</SectionLabel>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <ToolBtn active={tool === 'select-rect'} onClick={() => chooseTool('select-rect')} label="Rect">
+                    <Square size={12} />
+                  </ToolBtn>
+                  <ToolBtn active={tool === 'select-ellipse'} onClick={() => chooseTool('select-ellipse')} label="Ellipse">
+                    <Circle size={12} />
+                  </ToolBtn>
+                  <ToolBtn active={tool === 'lasso'} onClick={() => chooseTool('lasso')} label="Lasso">
+                    <Lasso size={12} />
+                  </ToolBtn>
+                  <ToolBtn active={tool === 'pen'} onClick={() => chooseTool('pen')} label="Pen">
+                    <Spline size={12} />
+                  </ToolBtn>
+                  <ToolBtn active={tool === 'magic-wand'} onClick={() => chooseTool('magic-wand')} label="Wand">
+                    <Wand2 size={12} />
+                  </ToolBtn>
+                  <ToolBtn active={tool === 'smart-object'} onClick={() => chooseTool('smart-object')} label="Smart">
+                    <Grid3X3 size={12} />
+                  </ToolBtn>
+                </div>
+
+                {/* Magic wand settings */}
+                {tool === 'magic-wand' && (
+                  <div className="space-y-2 pt-1 fade-in">
+                    <SliderRow label="Tolerance" value={wandTolerance} min={0} max={128} step={1} display={`${wandTolerance}`} onChange={setWandTolerance} />
+                    <SliderRow label="Edge Smooth" value={wandEdgeSmooth} min={0} max={5} step={1} display={`${wandEdgeSmooth}px`} onChange={setWandEdgeSmooth} />
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" checked={wandContiguous}
+                        onChange={e => setWandContiguous(e.target.checked)}
+                        className="accent-white w-3.5 h-3.5" />
+                      <span className="text-[12px] text-[#666]">Contiguous</span>
+                    </label>
+                  </div>
+                )}
+
+                {/* Smart object settings */}
+                {tool === 'smart-object' && (
+                  <div className="space-y-2 pt-1 fade-in">
+                    <SliderRow label="Sensitivity" value={smartSensitivity} min={0.05} max={0.9} step={0.01} display={smartSensitivity.toFixed(2)} onChange={setSmartSensitivity} />
+                  </div>
+                )}
+
+                {/* Pen tool info */}
+                {tool === 'pen' && (
+                  <div className="space-y-2 pt-1 fade-in">
+                    <div className="text-[11px] text-[#555] leading-relaxed">
+                      Click to add anchor points. Drag to create curves. Click first point to close. Press <kbd className="kbd">Enter</kbd> to convert to selection. Press <kbd className="kbd">Delete</kbd> to remove a point. <kbd className="kbd">Esc</kbd> to clear.
+                    </div>
+                    <div className="flex items-center gap-2 text-[11px] text-[#444]">
+                      <span>Points: {penPath.points.length}</span>
+                      {penPath.closed && <span className="tag tag-white">Closed</span>}
+                    </div>
+                    {penPath.closed && penPath.points.length >= 3 && (
+                      <button onClick={penPathToSelection} className="btn btn-ghost text-[11px] w-full py-1.5">
+                        Path → Selection
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* Lasso info */}
+                {tool === 'lasso' && (
+                  <div className="pt-1 fade-in">
+                    <div className="text-[11px] text-[#555] leading-relaxed">
+                      Click & drag to draw freehand selection area. Release to close and commit.
+                    </div>
+                  </div>
+                )}
+
+                <Divider />
 
                 {/* Selection mode */}
-                <div className="flex gap-1 pt-1">
+                <SectionLabel>Selection Mode</SectionLabel>
+                <div className="flex gap-1">
                   {(['replace','add','subtract'] as SelectionCombine[]).map(m => (
                     <button key={m}
                       onClick={() => setSelectionMode(m)}
-                      className={cn('flex-1 rounded text-[10px] py-1 border transition font-medium',
+                      className={cn('flex-1 rounded text-[10px] py-1.5 border transition font-medium',
                         selectionMode === m ? 'bg-white text-black border-white' : 'border-[#222] text-[#555] hover:text-white hover:border-[#444]'
                       )}
                     >
@@ -995,19 +1495,25 @@ export default function App() {
               <div className="pb-2">
                 {/* Add layer buttons */}
                 <div className="flex flex-wrap gap-1 px-4 pb-2">
-                  {([ ['dither','Dither'], ['glow','Glow'], ['halftone','Halftone'], ['lego','LEGO'] ] as [LayerType, string][]).map(([type, label]) => (
+                  {([
+                    ['dither','Dither'], ['glow','Glow'], ['halftone','Halftone'], ['lego','LEGO'],
+                    ['glitch','Glitch'], ['chromatic','Chroma'], ['pixelate','Pixel'],
+                    ['blur','Blur'], ['noise','Noise'], ['vhs','VHS'],
+                    ['bloom','Bloom'], ['emboss','Emboss'], ['posterize','Poster.'], ['duotone','Duotone'],
+                  ] as [LayerType, string][]).map(([type, label]) => (
                     <button
                       key={type}
                       onClick={() => addLayer(type)}
                       disabled={!sourceReady}
-                      className="text-[10px] font-medium px-2.5 py-1 rounded border border-[#222] text-[#666] hover:text-white hover:border-[#444] transition disabled:opacity-30 disabled:cursor-not-allowed"
+                      className="text-[10px] font-medium px-2 py-1 rounded border transition disabled:opacity-30 disabled:cursor-not-allowed hover:text-white hover:border-[#444]"
+                      style={{ borderColor: '#222', color: LAYER_COLORS[type] || '#666' }}
                     >
                       + {label}
                     </button>
                   ))}
                 </div>
 
-                {/* Layer list (reversed = top layer shown first) */}
+                {/* Layer list */}
                 <div className="border-t border-[#1a1a1a]">
                   {layers.length === 0 ? (
                     <div className="px-4 py-5 text-center text-[11px] text-[#333]">Load media first</div>
@@ -1208,6 +1714,182 @@ export default function App() {
                         onChange={v => patchSettings(selectedLayer.id, { borderWidth: v })} />
                     </div>
                   )}
+
+                  {/* ── Glitch ── */}
+                  {glitchS && (
+                    <div className="space-y-3">
+                      <SliderRow label="Intensity" value={glitchS.intensity} min={0} max={1} step={0.01} display={glitchS.intensity.toFixed(2)}
+                        onChange={v => patchSettings(selectedLayer.id, { intensity: v })} />
+                      <SliderRow label="Bands" value={glitchS.bands} min={1} max={30} step={1} display={`${glitchS.bands}`}
+                        onChange={v => patchSettings(selectedLayer.id, { bands: v })} />
+                      <SliderRow label="RGB Shift" value={glitchS.rgbShift} min={0} max={40} step={1} display={`${glitchS.rgbShift}px`}
+                        onChange={v => patchSettings(selectedLayer.id, { rgbShift: v })} />
+                      <SliderRow label="Seed" value={glitchS.seed} min={0} max={100} step={1} display={`${glitchS.seed}`}
+                        onChange={v => patchSettings(selectedLayer.id, { seed: v })} />
+                    </div>
+                  )}
+
+                  {/* ── Chromatic Aberration ── */}
+                  {chromaticS && (
+                    <div className="space-y-3">
+                      <SliderRow label="Red Offset" value={chromaticS.offsetR} min={-30} max={30} step={1} display={`${chromaticS.offsetR}px`}
+                        onChange={v => patchSettings(selectedLayer.id, { offsetR: v })} />
+                      <SliderRow label="Blue Offset" value={chromaticS.offsetB} min={-30} max={30} step={1} display={`${chromaticS.offsetB}px`}
+                        onChange={v => patchSettings(selectedLayer.id, { offsetB: v })} />
+                      <SliderRow label="Radial" value={chromaticS.radial} min={0} max={1} step={0.01} display={chromaticS.radial.toFixed(2)}
+                        onChange={v => patchSettings(selectedLayer.id, { radial: v })} />
+                    </div>
+                  )}
+
+                  {/* ── Pixelate ── */}
+                  {pixelateS && (
+                    <div className="space-y-3">
+                      <SliderRow label="Block Size" value={pixelateS.blockSize} min={2} max={64} step={1} display={`${pixelateS.blockSize}px`}
+                        onChange={v => patchSettings(selectedLayer.id, { blockSize: v })} />
+                      <div>
+                        <div className="text-[10px] text-[#444] mb-1 font-medium">Shape</div>
+                        <div className="flex gap-1">
+                          {(['square', 'circle'] as const).map(sh => (
+                            <button key={sh} onClick={() => patchSettings(selectedLayer.id, { shape: sh })}
+                              className={cn('flex-1 rounded text-[10px] py-1.5 border transition font-medium',
+                                pixelateS.shape === sh ? 'bg-white text-black border-white' : 'border-[#222] text-[#555] hover:text-white hover:border-[#444]'
+                              )}>{sh}</button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── Blur ── */}
+                  {blurS && (
+                    <div className="space-y-3">
+                      <div>
+                        <div className="text-[10px] text-[#444] mb-1 font-medium">Type</div>
+                        <div className="flex gap-1">
+                          {(['gaussian', 'motion', 'zoom'] as const).map(bt => (
+                            <button key={bt} onClick={() => patchSettings(selectedLayer.id, { type: bt })}
+                              className={cn('flex-1 rounded text-[10px] py-1.5 border transition font-medium',
+                                blurS.type === bt ? 'bg-white text-black border-white' : 'border-[#222] text-[#555] hover:text-white hover:border-[#444]'
+                              )}>{bt}</button>
+                          ))}
+                        </div>
+                      </div>
+                      <SliderRow label="Radius" value={blurS.radius} min={1} max={40} step={1} display={`${blurS.radius}px`}
+                        onChange={v => patchSettings(selectedLayer.id, { radius: v })} />
+                      {blurS.type === 'motion' && (
+                        <SliderRow label="Angle" value={blurS.angle} min={0} max={360} step={1} display={`${blurS.angle}°`}
+                          onChange={v => patchSettings(selectedLayer.id, { angle: v })} />
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── Noise ── */}
+                  {noiseS && (
+                    <div className="space-y-3">
+                      <SliderRow label="Amount" value={noiseS.amount} min={0} max={100} step={1} display={`${noiseS.amount}%`}
+                        onChange={v => patchSettings(selectedLayer.id, { amount: v })} />
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" checked={noiseS.monochrome}
+                          onChange={e => patchSettings(selectedLayer.id, { monochrome: e.target.checked })}
+                          className="accent-white w-3.5 h-3.5" />
+                        <span className="text-[12px] text-[#666]">Monochrome</span>
+                      </label>
+                      <div>
+                        <div className="text-[10px] text-[#444] mb-1 font-medium">Blend</div>
+                        <div className="flex gap-1">
+                          {(['overlay', 'add', 'screen'] as const).map(bl => (
+                            <button key={bl} onClick={() => patchSettings(selectedLayer.id, { blend: bl })}
+                              className={cn('flex-1 rounded text-[10px] py-1.5 border transition font-medium',
+                                noiseS.blend === bl ? 'bg-white text-black border-white' : 'border-[#222] text-[#555] hover:text-white hover:border-[#444]'
+                              )}>{bl}</button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── VHS / CRT ── */}
+                  {vhsS && (
+                    <div className="space-y-3">
+                      <SliderRow label="Scanline Opacity" value={vhsS.scanlineOpacity} min={0} max={1} step={0.01} display={`${Math.round(vhsS.scanlineOpacity * 100)}%`}
+                        onChange={v => patchSettings(selectedLayer.id, { scanlineOpacity: v })} />
+                      <SliderRow label="Scanline Width" value={vhsS.scanlineWidth} min={1} max={6} step={1} display={`${vhsS.scanlineWidth}px`}
+                        onChange={v => patchSettings(selectedLayer.id, { scanlineWidth: v })} />
+                      <SliderRow label="Noise" value={vhsS.noise} min={0} max={60} step={1} display={`${vhsS.noise}`}
+                        onChange={v => patchSettings(selectedLayer.id, { noise: v })} />
+                      <SliderRow label="Color Bleed" value={vhsS.colorBleed} min={0} max={20} step={1} display={`${vhsS.colorBleed}px`}
+                        onChange={v => patchSettings(selectedLayer.id, { colorBleed: v })} />
+                      <SliderRow label="CRT Warp" value={vhsS.warp} min={0} max={0.05} step={0.001} display={vhsS.warp.toFixed(3)}
+                        onChange={v => patchSettings(selectedLayer.id, { warp: v })} />
+                    </div>
+                  )}
+
+                  {/* ── Bloom ── */}
+                  {bloomS && (
+                    <div className="space-y-3">
+                      <SliderRow label="Radius" value={bloomS.radius} min={1} max={60} step={1} display={`${bloomS.radius}px`}
+                        onChange={v => patchSettings(selectedLayer.id, { radius: v })} />
+                      <SliderRow label="Intensity" value={bloomS.intensity} min={0} max={3} step={0.05} display={bloomS.intensity.toFixed(2)}
+                        onChange={v => patchSettings(selectedLayer.id, { intensity: v })} />
+                      <SliderRow label="Threshold" value={bloomS.threshold} min={0} max={255} step={1} display={`${bloomS.threshold}`}
+                        onChange={v => patchSettings(selectedLayer.id, { threshold: v })} />
+                      <SliderRow label="Softness" value={bloomS.softness} min={0} max={1} step={0.01} display={bloomS.softness.toFixed(2)}
+                        onChange={v => patchSettings(selectedLayer.id, { softness: v })} />
+                    </div>
+                  )}
+
+                  {/* ── Emboss / Edge ── */}
+                  {embossS && (
+                    <div className="space-y-3">
+                      <div>
+                        <div className="text-[10px] text-[#444] mb-1 font-medium">Type</div>
+                        <div className="flex gap-1">
+                          {(['emboss', 'edge', 'outline'] as const).map(et => (
+                            <button key={et} onClick={() => patchSettings(selectedLayer.id, { type: et })}
+                              className={cn('flex-1 rounded text-[10px] py-1.5 border transition font-medium',
+                                embossS.type === et ? 'bg-white text-black border-white' : 'border-[#222] text-[#555] hover:text-white hover:border-[#444]'
+                              )}>{et}</button>
+                          ))}
+                        </div>
+                      </div>
+                      <SliderRow label="Strength" value={embossS.strength} min={0.5} max={3} step={0.05} display={embossS.strength.toFixed(2)}
+                        onChange={v => patchSettings(selectedLayer.id, { strength: v })} />
+                      <SliderRow label="Original Mix" value={embossS.mix} min={0} max={1} step={0.01} display={`${Math.round(embossS.mix * 100)}%`}
+                        onChange={v => patchSettings(selectedLayer.id, { mix: v })} />
+                    </div>
+                  )}
+
+                  {/* ── Posterize ── */}
+                  {posterizeS && (
+                    <div className="space-y-3">
+                      <SliderRow label="Levels" value={posterizeS.levels} min={2} max={32} step={1} display={`${posterizeS.levels}`}
+                        onChange={v => patchSettings(selectedLayer.id, { levels: v })} />
+                      <SliderRow label="Gamma" value={posterizeS.gamma} min={0.5} max={2} step={0.01} display={posterizeS.gamma.toFixed(2)}
+                        onChange={v => patchSettings(selectedLayer.id, { gamma: v })} />
+                    </div>
+                  )}
+
+                  {/* ── Duotone ── */}
+                  {duotoneS && (
+                    <div className="space-y-3">
+                      <SliderRow label="Contrast" value={duotoneS.contrast} min={0.5} max={2} step={0.01} display={duotoneS.contrast.toFixed(2)}
+                        onChange={v => patchSettings(selectedLayer.id, { contrast: v })} />
+                      <div className="grid grid-cols-2 gap-3">
+                        <label>
+                          <div className="text-[10px] text-[#444] mb-1">Shadow</div>
+                          <input type="color" value={duotoneS.darkColor}
+                            onChange={e => patchSettings(selectedLayer.id, { darkColor: e.target.value })}
+                            className="w-full h-8 cursor-pointer rounded bg-transparent border border-[#222]" />
+                        </label>
+                        <label>
+                          <div className="text-[10px] text-[#444] mb-1">Highlight</div>
+                          <input type="color" value={duotoneS.lightColor}
+                            onChange={e => patchSettings(selectedLayer.id, { lightColor: e.target.value })}
+                            className="w-full h-8 cursor-pointer rounded bg-transparent border border-[#222]" />
+                        </label>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1234,6 +1916,12 @@ export default function App() {
                 {tool === 'brush' ? 'Painting mask' : 'Erasing mask'}
               </span>
             )}
+            {tool === 'pen' && penPath.points.length > 0 && (
+              <span className="tag tag-white">Pen: {penPath.points.length} pts{penPath.closed ? ' · closed' : ''}</span>
+            )}
+            {tool === 'magic-wand' && <span className="tag tag-white">Click to select similar colors</span>}
+            {tool === 'smart-object' && <span className="tag tag-white">Click on object to select</span>}
+            {tool === 'lasso' && <span className="tag tag-white">Drag to draw selection</span>}
           </div>
 
           <div className="flex items-center gap-2">
@@ -1274,14 +1962,13 @@ export default function App() {
                 <input type="file" className="hidden" accept="image/*,video/*" onChange={handleUpload} />
               </label>
               <div className="flex flex-wrap justify-center gap-1.5 mt-2">
-                {['Dither','Glow','Halftone','LEGO','Video','PNG alpha'].map(f => (
+                {['Dither','Glow','Halftone','LEGO','Glitch','Chromatic','Pixelate','Blur','Noise','VHS/CRT','Bloom','Emboss','Posterize','Duotone'].map(f => (
                   <span key={f} className="tag tag-white">{f}</span>
                 ))}
               </div>
             </div>
           ) : (
             <div className="relative max-h-full max-w-full">
-              {/* checkerboard container */}
               <div className="checkerboard-bg relative overflow-hidden border border-[#1a1a1a] shadow-[0_8px_40px_rgba(0,0,0,0.8)]">
                 <canvas ref={displayRef} className="block h-auto max-h-[calc(100vh-100px)] w-auto max-w-full" />
                 <canvas

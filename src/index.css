@@ -276,3 +276,18 @@ button {
 .fade-in {
   animation: fadeIn 0.2s ease forwards;
 }
+
+/* ── Keyboard shortcut badge ── */
+.kbd {
+  display: inline-block;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-family: 'Space Grotesk', monospace;
+  font-weight: 600;
+  color: #aaa;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 3px;
+  line-height: 1.4;
+  vertical-align: middle;
+}
