@@ -19,6 +19,10 @@ import {
   PosterizeSettings, DuotoneSettings,
 } from './utils/effects';
 import {
+  processNeonGlow, processMotionBlur, processTextFill, processSparkle,
+  NeonGlowSettings, MotionBlurSettings, TextFillSettings, SparkleSettings,
+} from './utils/newEffects';
+import {
   AnchorPoint, PenPath, createAnchor, penPathToPath2D,
   drawPenPathUI, hitTestPenPath, mirrorHandle, PenHitResult,
 } from './utils/penTool';
@@ -40,7 +44,8 @@ type SelectionCombine = 'replace' | 'add' | 'subtract';
 type LayerType = 'dither' | 'glow' | 'halftone' | 'lego'
   | 'glitch' | 'chromatic' | 'pixelate' | 'blur'
   | 'noise' | 'vhs' | 'bloom' | 'emboss'
-  | 'posterize' | 'duotone';
+  | 'posterize' | 'duotone'
+  | 'neon-glow' | 'motion-blur' | 'text-fill' | 'sparkle';
 
 interface DitherSettings {
   pixelSize: number; matrixSize: number;
@@ -65,7 +70,8 @@ interface EffectLayer {
   settings: DitherSettings | GlowSettings | HalftoneSettings | LegoSettings
     | GlitchSettings | ChromaticSettings | PixelateSettings | BlurSettings
     | NoiseSettings | VHSSettings | BloomSettings | EmbossSettings
-    | PosterizeSettings | DuotoneSettings;
+    | PosterizeSettings | DuotoneSettings
+    | NeonGlowSettings | MotionBlurSettings | TextFillSettings | SparkleSettings;
 }
 interface SelectionShape {
   id: string; type: 'rect' | 'ellipse'; combine: SelectionCombine;
@@ -193,6 +199,41 @@ function defaultDuotone(): EffectLayer {
     settings: { darkColor: '#0a0a2e', lightColor: '#ff6b35', contrast: 1.2 } as DuotoneSettings,
   };
 }
+function defaultNeonGlow(): EffectLayer {
+  return {
+    id: uid(), name: 'Neon Glow', type: 'neon-glow',
+    enabled: true, opacity: 0.9, blendMode: 'screen', useMask: false,
+    settings: { radius: 24, intensity: 1.8, threshold: 100, color1: '#ff00ff', color2: '#00ffff', colorMix: 0.5, edgeGlow: 0.6, pulsePhase: 0 } as NeonGlowSettings,
+  };
+}
+function defaultMotionBlur(): EffectLayer {
+  return {
+    id: uid(), name: 'Motion Blur', type: 'motion-blur',
+    enabled: true, opacity: 1, blendMode: 'source-over', useMask: false,
+    settings: { angle: 0, distance: 30, samples: 12, opacity: 0.8 } as MotionBlurSettings,
+  };
+}
+function defaultTextFill(): EffectLayer {
+  return {
+    id: uid(), name: 'Text Fill', type: 'text-fill',
+    enabled: true, opacity: 1, blendMode: 'source-over', useMask: false,
+    settings: {
+      text: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789',
+      fontSize: 10, lineHeight: 1.1, letterSpacing: 0,
+      fontFamily: 'Space Grotesk',
+      color: '#ffffff', bgColor: 'transparent',
+      randomize: true, randomSeed: 42, density: 1,
+      fillOpaque: true, showOriginalColor: false,
+    } as TextFillSettings,
+  };
+}
+function defaultSparkle(): EffectLayer {
+  return {
+    id: uid(), name: 'Sparkle', type: 'sparkle',
+    enabled: true, opacity: 1, blendMode: 'screen', useMask: false,
+    settings: { threshold: 210, intensity: 1.2, size: 18, streaks: 4, angle: 0, color: '#ffffff', rainbow: 0 } as SparkleSettings,
+  };
+}
 
 function ensureSize(canvas: HTMLCanvasElement, w: number, h: number) {
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
@@ -294,6 +335,7 @@ const LAYER_COLORS: Record<LayerType, string> = {
   glitch: '#f44', chromatic: '#c4f', pixelate: '#6bf', blur: '#8cf',
   noise: '#999', vhs: '#f84', bloom: '#ff8', emboss: '#aab',
   posterize: '#6e6', duotone: '#fa6',
+  'neon-glow': '#f0f', 'motion-blur': '#4cf', 'text-fill': '#ccc', 'sparkle': '#ffd54a',
 };
 
 function LayerDot({ type }: { type: LayerType }) {
@@ -587,6 +629,14 @@ export default function App() {
       ctx.drawImage(processPosterize(src, layer.settings as PosterizeSettings), 0, 0);
     } else if (layer.type === 'duotone') {
       ctx.drawImage(processDuotone(src, layer.settings as DuotoneSettings), 0, 0);
+    } else if (layer.type === 'neon-glow') {
+      ctx.drawImage(processNeonGlow(src, layer.settings as NeonGlowSettings), 0, 0);
+    } else if (layer.type === 'motion-blur') {
+      ctx.drawImage(processMotionBlur(src, layer.settings as MotionBlurSettings), 0, 0);
+    } else if (layer.type === 'text-fill') {
+      ctx.drawImage(processTextFill(src, layer.settings as TextFillSettings), 0, 0);
+    } else if (layer.type === 'sparkle') {
+      ctx.drawImage(processSparkle(src, layer.settings as SparkleSettings), 0, 0);
     }
   }, [ensureLayerBuffers]);
 
@@ -763,6 +813,8 @@ export default function App() {
       glitch: defaultGlitch, chromatic: defaultChromatic, pixelate: defaultPixelate, blur: defaultBlur,
       noise: defaultNoise, vhs: defaultVHS, bloom: defaultBloom, emboss: defaultEmboss,
       posterize: defaultPosterize, duotone: defaultDuotone,
+      'neon-glow': defaultNeonGlow, 'motion-blur': defaultMotionBlur, 'text-fill': defaultTextFill,
+      sparkle: defaultSparkle,
     };
     const l = (factories[type] || defaultDither)();
     setLayers(prev => [...prev, l]);
@@ -1253,6 +1305,10 @@ export default function App() {
   const embossS    = selectedLayer?.type === 'emboss'     ? selectedLayer.settings as EmbossSettings     : null;
   const posterizeS = selectedLayer?.type === 'posterize'  ? selectedLayer.settings as PosterizeSettings  : null;
   const duotoneS   = selectedLayer?.type === 'duotone'    ? selectedLayer.settings as DuotoneSettings    : null;
+  const neonS      = selectedLayer?.type === 'neon-glow'  ? selectedLayer.settings as NeonGlowSettings   : null;
+  const motionS    = selectedLayer?.type === 'motion-blur' ? selectedLayer.settings as MotionBlurSettings : null;
+  const textFillS  = selectedLayer?.type === 'text-fill'  ? selectedLayer.settings as TextFillSettings   : null;
+  const sparkleS   = selectedLayer?.type === 'sparkle'    ? selectedLayer.settings as SparkleSettings    : null;
 
   const cursor = tool === 'brush' || tool === 'erase' ? 'crosshair'
                : tool === 'select-rect' || tool === 'select-ellipse' ? 'cell'
@@ -1500,6 +1556,7 @@ export default function App() {
                     ['glitch','Glitch'], ['chromatic','Chroma'], ['pixelate','Pixel'],
                     ['blur','Blur'], ['noise','Noise'], ['vhs','VHS'],
                     ['bloom','Bloom'], ['emboss','Emboss'], ['posterize','Poster.'], ['duotone','Duotone'],
+                    ['neon-glow','Neon'], ['motion-blur','M.Blur'], ['text-fill','Text'], ['sparkle','Sparkle'],
                   ] as [LayerType, string][]).map(([type, label]) => (
                     <button
                       key={type}
@@ -1890,6 +1947,170 @@ export default function App() {
                       </div>
                     </div>
                   )}
+
+                  {/* ── Neon Glow ── */}
+                  {neonS && (
+                    <div className="space-y-3">
+                      <SliderRow label="Radius" value={neonS.radius} min={2} max={80} step={1} display={`${neonS.radius}px`}
+                        onChange={v => patchSettings(selectedLayer.id, { radius: v })} />
+                      <SliderRow label="Intensity" value={neonS.intensity} min={0} max={4} step={0.05} display={neonS.intensity.toFixed(2)}
+                        onChange={v => patchSettings(selectedLayer.id, { intensity: v })} />
+                      <SliderRow label="Threshold" value={neonS.threshold} min={0} max={255} step={1} display={`${neonS.threshold}`}
+                        onChange={v => patchSettings(selectedLayer.id, { threshold: v })} />
+                      <SliderRow label="Edge Glow" value={neonS.edgeGlow} min={0} max={1} step={0.01} display={`${Math.round(neonS.edgeGlow * 100)}%`}
+                        onChange={v => patchSettings(selectedLayer.id, { edgeGlow: v })} />
+                      <SliderRow label="Color Mix" value={neonS.colorMix} min={0} max={1} step={0.01} display={`${Math.round(neonS.colorMix * 100)}%`}
+                        onChange={v => patchSettings(selectedLayer.id, { colorMix: v })} />
+                      <SliderRow label="Phase" value={neonS.pulsePhase} min={0} max={360} step={1} display={`${neonS.pulsePhase}°`}
+                        onChange={v => patchSettings(selectedLayer.id, { pulsePhase: v })} />
+                      <div className="grid grid-cols-2 gap-3">
+                        <label>
+                          <div className="text-[10px] text-[#444] mb-1">Color 1</div>
+                          <input type="color" value={neonS.color1}
+                            onChange={e => patchSettings(selectedLayer.id, { color1: e.target.value })}
+                            className="w-full h-8 cursor-pointer rounded bg-transparent border border-[#222]" />
+                        </label>
+                        <label>
+                          <div className="text-[10px] text-[#444] mb-1">Color 2</div>
+                          <input type="color" value={neonS.color2}
+                            onChange={e => patchSettings(selectedLayer.id, { color2: e.target.value })}
+                            className="w-full h-8 cursor-pointer rounded bg-transparent border border-[#222]" />
+                        </label>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── Motion Blur ── */}
+                  {motionS && (
+                    <div className="space-y-3">
+                      <SliderRow label="Distance" value={motionS.distance} min={1} max={100} step={1} display={`${motionS.distance}px`}
+                        onChange={v => patchSettings(selectedLayer.id, { distance: v })} />
+                      <SliderRow label="Angle" value={motionS.angle} min={0} max={360} step={1} display={`${motionS.angle}°`}
+                        onChange={v => patchSettings(selectedLayer.id, { angle: v })} />
+                      <SliderRow label="Samples" value={motionS.samples} min={3} max={20} step={1} display={`${motionS.samples}`}
+                        onChange={v => patchSettings(selectedLayer.id, { samples: v })} />
+                      <SliderRow label="Trail Opacity" value={motionS.opacity} min={0} max={1} step={0.01} display={`${Math.round(motionS.opacity * 100)}%`}
+                        onChange={v => patchSettings(selectedLayer.id, { opacity: v })} />
+                    </div>
+                  )}
+
+                  {/* ── Text Fill ── */}
+                  {textFillS && (
+                    <div className="space-y-3">
+                      <div>
+                        <div className="text-[10px] text-[#444] mb-1 font-medium">Text / Characters</div>
+                        <input
+                          value={textFillS.text}
+                          onChange={e => patchSettings(selectedLayer.id, { text: e.target.value })}
+                          className="field text-[12px]"
+                          placeholder="Characters to use..."
+                        />
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-[#444] mb-1 font-medium">Font Family</div>
+                        <select
+                          value={textFillS.fontFamily}
+                          onChange={e => patchSettings(selectedLayer.id, { fontFamily: e.target.value })}
+                          className="field text-[12px] py-1.5"
+                        >
+                          <option value="Space Grotesk">Space Grotesk</option>
+                          <option value="Helvetica Neue">Helvetica Neue</option>
+                          <option value="Arial">Arial</option>
+                          <option value="Helvetica">Helvetica</option>
+                          <option value="Inter">Inter</option>
+                          <option value="system-ui">System UI</option>
+                          <option value="Courier New">Courier New</option>
+                          <option value="monospace">Monospace</option>
+                          <option value="ui-monospace">UI Monospace</option>
+                          <option value="Menlo">Menlo</option>
+                          <option value="Monaco">Monaco</option>
+                          <option value="Consolas">Consolas</option>
+                          <option value="JetBrains Mono">JetBrains Mono</option>
+                          <option value="IBM Plex Mono">IBM Plex Mono</option>
+                          <option value="Fira Code">Fira Code</option>
+                          <option value="Verdana">Verdana</option>
+                          <option value="Georgia">Georgia</option>
+                          <option value="Times New Roman">Times New Roman</option>
+                          <option value="Impact">Impact</option>
+                        </select>
+                      </div>
+                      <SliderRow label="Font Size" value={textFillS.fontSize} min={4} max={48} step={1} display={`${textFillS.fontSize}px`}
+                        onChange={v => patchSettings(selectedLayer.id, { fontSize: v })} />
+                      <SliderRow label="Line Height" value={textFillS.lineHeight} min={0.8} max={2} step={0.05} display={textFillS.lineHeight.toFixed(2)}
+                        onChange={v => patchSettings(selectedLayer.id, { lineHeight: v })} />
+                      <SliderRow label="Letter Spacing" value={textFillS.letterSpacing} min={-2} max={10} step={0.5} display={`${textFillS.letterSpacing}`}
+                        onChange={v => patchSettings(selectedLayer.id, { letterSpacing: v })} />
+                      <SliderRow label="Density" value={textFillS.density} min={0.5} max={3} step={0.05} display={textFillS.density.toFixed(2)}
+                        onChange={v => patchSettings(selectedLayer.id, { density: v })} />
+                      <SliderRow label="Random Seed" value={textFillS.randomSeed} min={0} max={100} step={1} display={`${textFillS.randomSeed}`}
+                        onChange={v => patchSettings(selectedLayer.id, { randomSeed: v })} />
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" checked={textFillS.randomize}
+                          onChange={e => patchSettings(selectedLayer.id, { randomize: e.target.checked })}
+                          className="accent-white w-3.5 h-3.5" />
+                        <span className="text-[12px] text-[#666]">Randomize characters</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" checked={textFillS.fillOpaque}
+                          onChange={e => patchSettings(selectedLayer.id, { fillOpaque: e.target.checked })}
+                          className="accent-white w-3.5 h-3.5" />
+                        <span className="text-[12px] text-[#666]">Fill opaque areas (needs alpha)</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" checked={textFillS.showOriginalColor}
+                          onChange={e => patchSettings(selectedLayer.id, { showOriginalColor: e.target.checked })}
+                          className="accent-white w-3.5 h-3.5" />
+                        <span className="text-[12px] text-[#666]">Use original colors</span>
+                      </label>
+                      <div className="grid grid-cols-2 gap-3">
+                        <label>
+                          <div className="text-[10px] text-[#444] mb-1">Text color</div>
+                          <input type="color" value={textFillS.color}
+                            onChange={e => patchSettings(selectedLayer.id, { color: e.target.value })}
+                            className="w-full h-8 cursor-pointer rounded bg-transparent border border-[#222]" />
+                        </label>
+                        <div className="space-y-2">
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" checked={textFillS.bgColor === 'transparent'}
+                              onChange={e => patchSettings(selectedLayer.id, { bgColor: e.target.checked ? 'transparent' : '#000000' })}
+                              className="accent-white w-3.5 h-3.5" />
+                            <span className="text-[12px] text-[#666]">Transparent background</span>
+                          </label>
+                          {textFillS.bgColor !== 'transparent' && (
+                            <label>
+                              <div className="text-[10px] text-[#444] mb-1">Background</div>
+                              <input type="color" value={textFillS.bgColor}
+                                onChange={e => patchSettings(selectedLayer.id, { bgColor: e.target.value })}
+                                className="w-full h-8 cursor-pointer rounded bg-transparent border border-[#222]" />
+                            </label>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {sparkleS && (
+                    <div className="space-y-3">
+                      <SliderRow label="Threshold" value={sparkleS.threshold} min={0} max={255} step={1} display={`${sparkleS.threshold}`}
+                        onChange={v => patchSettings(selectedLayer.id, { threshold: v })} />
+                      <SliderRow label="Intensity" value={sparkleS.intensity} min={0} max={3} step={0.05} display={sparkleS.intensity.toFixed(2)}
+                        onChange={v => patchSettings(selectedLayer.id, { intensity: v })} />
+                      <SliderRow label="Size" value={sparkleS.size} min={4} max={48} step={1} display={`${sparkleS.size}px`}
+                        onChange={v => patchSettings(selectedLayer.id, { size: v })} />
+                      <SliderRow label="Streaks" value={sparkleS.streaks} min={4} max={8} step={1} display={`${sparkleS.streaks}`}
+                        onChange={v => patchSettings(selectedLayer.id, { streaks: v })} />
+                      <SliderRow label="Angle" value={sparkleS.angle} min={0} max={180} step={1} display={`${sparkleS.angle}°`}
+                        onChange={v => patchSettings(selectedLayer.id, { angle: v })} />
+                      <SliderRow label="Rainbow" value={sparkleS.rainbow} min={0} max={1} step={0.01} display={`${Math.round(sparkleS.rainbow * 100)}%`}
+                        onChange={v => patchSettings(selectedLayer.id, { rainbow: v })} />
+                      <label>
+                        <div className="text-[10px] text-[#444] mb-1">Sparkle color</div>
+                        <input type="color" value={sparkleS.color}
+                          onChange={e => patchSettings(selectedLayer.id, { color: e.target.value })}
+                          className="w-full h-8 cursor-pointer rounded bg-transparent border border-[#222]" />
+                      </label>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1962,7 +2183,7 @@ export default function App() {
                 <input type="file" className="hidden" accept="image/*,video/*" onChange={handleUpload} />
               </label>
               <div className="flex flex-wrap justify-center gap-1.5 mt-2">
-                {['Dither','Glow','Halftone','LEGO','Glitch','Chromatic','Pixelate','Blur','Noise','VHS/CRT','Bloom','Emboss','Posterize','Duotone'].map(f => (
+                {['Dither','Glow','Halftone','LEGO','Glitch','Chromatic','Pixelate','Blur','Noise','VHS/CRT','Bloom','Emboss','Posterize','Duotone','Neon Glow','Motion Blur','Text Fill','Sparkle'].map(f => (
                   <span key={f} className="tag tag-white">{f}</span>
                 ))}
               </div>
@@ -1992,6 +2213,17 @@ export default function App() {
       </main>
 
       <video ref={hiddenVideoRef} className="hidden" playsInline muted />
+
+      {/* Created by neezzy */}
+      <a
+        href="https://t.me/neezzy"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="fixed bottom-4 right-4 z-50 text-[11px] font-medium tracking-wide text-black border border-white bg-white hover:bg-[#eaeaea] px-3 py-1.5 rounded-full transition-all duration-300 backdrop-blur-sm shadow-[0_6px_24px_rgba(255,255,255,0.12)]"
+        style={{ fontFamily: "'Space Grotesk', sans-serif" }}
+      >
+        Created by <span className="text-black">neezzy</span>
+      </a>
     </div>
   );
 }
