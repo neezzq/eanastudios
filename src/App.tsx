@@ -1,783 +1,1310 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Upload, Download, Eraser, Pen, Brush, Eye, EyeOff,
-  ChevronUp, ChevronDown, Trash2, Sparkles, Grid3X3,
+  Upload, Download, Eraser, Pen, Eye, EyeOff,
+  ChevronUp, ChevronDown, Trash2, Grid3X3,
   Layers, GripVertical, PaintBucket, Circle,
+  Play, Pause, Film, Minus, Plus, Square,
 } from 'lucide-react';
 import { processDither } from './utils/dither';
 import { processGlow } from './utils/glow';
 import { processHalftone } from './utils/halftone';
+import { processLego } from './utils/lego';
 import { cn } from './utils/cn';
 
-/* ─── Types ─── */
+/* ─────────────────────────── Types ─────────────────────────── */
 type BlendMode =
   | 'source-over' | 'multiply' | 'screen' | 'overlay'
   | 'darken' | 'lighten' | 'color-dodge' | 'color-burn'
   | 'hard-light' | 'soft-light' | 'difference' | 'exclusion' | 'luminosity';
 
+type MediaKind = 'image' | 'video';
+type ToolMode = 'none' | 'brush' | 'erase' | 'select-rect' | 'select-ellipse';
+type SelectionCombine = 'replace' | 'add' | 'subtract';
+type LayerType = 'dither' | 'glow' | 'halftone' | 'lego';
+
 interface DitherSettings {
-  pixelSize: number;
-  matrixSize: number;
-  brightness: number;
-  contrast: number;
-  darkColor: string;
-  lightColor: string;
+  pixelSize: number; matrixSize: number;
+  brightness: number; contrast: number;
+  darkColor: string; lightColor: string;
 }
-
 interface GlowSettings {
-  radius: number;
-  intensity: number;
-  threshold: number;
-  color: string;
+  radius: number; intensity: number; threshold: number; color: string;
 }
-
 interface HalftoneSettings {
-  cellSize: number;
-  exposure: number;
-  gamma: number;
-  darkColor: string;
-  lightColor: string;
+  cellSize: number; exposure: number; gamma: number;
+  darkColor: string; lightColor: string;
 }
-
+interface LegoSettings {
+  brickSize: number; saturation: number; brightness: number;
+  studOpacity: number; quantize: number; borderWidth: number;
+}
 interface EffectLayer {
-  id: string;
-  name: string;
-  type: 'dither' | 'glow' | 'halftone';
-  enabled: boolean;
-  opacity: number;
-  blendMode: BlendMode;
+  id: string; name: string; type: LayerType;
+  enabled: boolean; opacity: number; blendMode: BlendMode;
   useMask: boolean;
-  settings: DitherSettings | GlowSettings | HalftoneSettings;
+  settings: DitherSettings | GlowSettings | HalftoneSettings | LegoSettings;
+}
+interface SelectionShape {
+  id: string; type: 'rect' | 'ellipse'; combine: SelectionCombine;
+  x: number; y: number; w: number; h: number;
+}
+interface DraftSelection {
+  type: 'rect' | 'ellipse'; combine: SelectionCombine;
+  startX: number; startY: number; endX: number; endY: number;
 }
 
 const BLEND_MODES: { value: BlendMode; label: string }[] = [
   { value: 'source-over', label: 'Normal' },
-  { value: 'multiply', label: 'Multiply' },
-  { value: 'screen', label: 'Screen' },
-  { value: 'overlay', label: 'Overlay' },
-  { value: 'darken', label: 'Darken' },
-  { value: 'lighten', label: 'Lighten' },
+  { value: 'multiply',    label: 'Multiply' },
+  { value: 'screen',      label: 'Screen' },
+  { value: 'overlay',     label: 'Overlay' },
+  { value: 'darken',      label: 'Darken' },
+  { value: 'lighten',     label: 'Lighten' },
   { value: 'color-dodge', label: 'Color Dodge' },
-  { value: 'color-burn', label: 'Color Burn' },
-  { value: 'hard-light', label: 'Hard Light' },
-  { value: 'soft-light', label: 'Soft Light' },
-  { value: 'difference', label: 'Difference' },
-  { value: 'exclusion', label: 'Exclusion' },
-  { value: 'luminosity', label: 'Luminosity' },
+  { value: 'color-burn',  label: 'Color Burn' },
+  { value: 'hard-light',  label: 'Hard Light' },
+  { value: 'soft-light',  label: 'Soft Light' },
+  { value: 'difference',  label: 'Difference' },
+  { value: 'exclusion',   label: 'Exclusion' },
+  { value: 'luminosity',  label: 'Luminosity' },
 ];
 
-/* ─── Helpers ─── */
-let _nextId = 1;
-const uid = () => `l${_nextId++}`;
+let nextId = 1;
+const uid = () => `id-${nextId++}`;
 
 function defaultDither(): EffectLayer {
   return {
     id: uid(), name: 'Dither', type: 'dither',
     enabled: true, opacity: 1, blendMode: 'source-over', useMask: false,
-    settings: { pixelSize: 3, matrixSize: 4, brightness: 10, contrast: 20, darkColor: '#1a1a2e', lightColor: '#ffffff' } as DitherSettings,
+    settings: { pixelSize: 3, matrixSize: 4, brightness: 10, contrast: 20, darkColor: '#000000', lightColor: '#ffffff' } as DitherSettings,
   };
 }
-
 function defaultGlow(): EffectLayer {
   return {
     id: uid(), name: 'Glow', type: 'glow',
     enabled: true, opacity: 0.7, blendMode: 'screen', useMask: false,
-    settings: { radius: 20, intensity: 1.5, threshold: 128, color: '#ffaa44' } as GlowSettings,
+    settings: { radius: 18, intensity: 1.4, threshold: 120, color: '#ffffff' } as GlowSettings,
   };
 }
-
 function defaultHalftone(): EffectLayer {
   return {
     id: uid(), name: 'Halftone', type: 'halftone',
     enabled: true, opacity: 1, blendMode: 'source-over', useMask: false,
-    settings: { cellSize: 10, exposure: 1, gamma: 1, darkColor: '#000000', lightColor: '#e6e6e6' } as HalftoneSettings,
+    settings: { cellSize: 10, exposure: 1, gamma: 1, darkColor: '#000000', lightColor: '#ffffff' } as HalftoneSettings,
+  };
+}
+function defaultLego(): EffectLayer {
+  return {
+    id: uid(), name: 'LEGO', type: 'lego',
+    enabled: true, opacity: 1, blendMode: 'source-over', useMask: false,
+    settings: { brickSize: 16, saturation: 1.2, brightness: 5, studOpacity: 0.85, quantize: 16, borderWidth: 2 } as LegoSettings,
   };
 }
 
-/* ─── Slider ─── */
-function Slider({ label, value, min, max, step, display, onChange }: {
+function ensureSize(canvas: HTMLCanvasElement, w: number, h: number) {
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+}
+function normalizeRect(x1: number, y1: number, x2: number, y2: number) {
+  return { x: Math.min(x1, x2), y: Math.min(y1, y2), w: Math.max(1, Math.abs(x2 - x1)), h: Math.max(1, Math.abs(y2 - y1)) };
+}
+function draftToShape(draft: DraftSelection): SelectionShape {
+  const { x, y, w, h } = normalizeRect(draft.startX, draft.startY, draft.endX, draft.endY);
+  return { id: 'draft', type: draft.type, combine: draft.combine, x, y, w, h };
+}
+function drawSelectionPath(ctx: CanvasRenderingContext2D, shape: Pick<SelectionShape, 'type'|'x'|'y'|'w'|'h'>) {
+  ctx.beginPath();
+  if (shape.type === 'ellipse') ctx.ellipse(shape.x + shape.w / 2, shape.y + shape.h / 2, shape.w / 2, shape.h / 2, 0, 0, Math.PI * 2);
+  else ctx.rect(shape.x, shape.y, shape.w, shape.h);
+}
+function formatTime(s: number) {
+  if (!Number.isFinite(s)) return '0:00';
+  return `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, '0')}`;
+}
+function sanitizeFileBase(name: string) {
+  return (name || 'eana-studio').replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9-_]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'eana-studio';
+}
+function detectTransparency(canvas: HTMLCanvasElement) {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx || !canvas.width || !canvas.height) return false;
+  const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  for (let i = 3; i < data.length; i += 4) if (data[i] < 250) return true;
+  return false;
+}
+
+/* ─────────────────── UI primitives ─────────────────── */
+
+function SliderRow({ label, value, min, max, step, display, onChange }: {
   label: string; value: number; min: number; max: number; step: number;
   display: string; onChange: (v: number) => void;
 }) {
   return (
-    <div className="space-y-1">
-      <div className="flex justify-between items-center">
-        <span className="text-xs text-neutral-400">{label}</span>
-        <span className="text-[10px] text-neutral-500 tabular-nums">{display}</span>
+    <div>
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-[11px] text-[#666] font-medium tracking-wide">{label}</span>
+        <span className="text-[11px] font-mono text-[#888] bg-[#111] border border-[#222] rounded px-1.5 py-0.5">{display}</span>
       </div>
       <input
         type="range" min={min} max={max} step={step} value={value}
         onChange={e => onChange(parseFloat(e.target.value))}
-        className="w-full h-1 bg-neutral-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+        className="range-slim cursor-pointer"
       />
     </div>
   );
 }
 
-/* ═══════════════════ APP ═══════════════════ */
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return <div className="section-label">{children}</div>;
+}
+
+function IconBtn({ onClick, title, children, active }: {
+  onClick: (e: React.MouseEvent) => void; title?: string;
+  children: React.ReactNode; active?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick} title={title}
+      className={cn(
+        'inline-flex items-center justify-center w-7 h-7 rounded transition',
+        active ? 'bg-white text-black' : 'text-[#555] hover:text-white hover:bg-[#1a1a1a]'
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function ToolBtn({ active, onClick, children, label }: {
+  active: boolean; onClick: () => void; children: React.ReactNode; label: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        'flex items-center gap-2 px-3 py-2 rounded text-[12px] font-medium transition border',
+        active
+          ? 'bg-white text-black border-white'
+          : 'bg-transparent text-[#777] border-[#222] hover:border-[#444] hover:text-white'
+      )}
+    >
+      {children}
+      <span>{label}</span>
+    </button>
+  );
+}
+
+function Divider() {
+  return <div className="border-t border-[#1a1a1a] my-3" />;
+}
+
+/* layer type colour dot (monochrome version — just grey shades) */
+function LayerDot({ type }: { type: LayerType }) {
+  return (
+    <span className={cn(
+      'w-1.5 h-1.5 rounded-full shrink-0',
+      type === 'dither'   ? 'bg-[#888]' :
+      type === 'glow'     ? 'bg-[#bbb]' :
+      type === 'halftone' ? 'bg-[#666]' :
+                            'bg-[#aaa]'
+    )} />
+  );
+}
+
+/* ─────────────────────────── App ─────────────────────────── */
 export default function App() {
-  const [imageSrc, setImageSrc] = useState<string | null>(null);
-  const [layers, setLayers] = useState<EffectLayer[]>([]);
-  const [selId, setSelId] = useState<string | null>(null);
-  const [brushMode, setBrushMode] = useState<'none' | 'brush' | 'erase'>('none');
-  const [brushSize, setBrushSize] = useState(50);
-  const [isDrawing, setIsDrawing] = useState(false);
-  const [dragId, setDragId] = useState<string | null>(null);
+  const [sourceUrl, setSourceUrl]         = useState<string | null>(null);
+  const [sourceKind, setSourceKind]       = useState<MediaKind | null>(null);
+  const [sourceName, setSourceName]       = useState('');
+  const [sourceReady, setSourceReady]     = useState(false);
+  const [sourceHasAlpha, setSourceHasAlpha] = useState(false);
+  const [mediaSize, setMediaSize]         = useState({ width: 0, height: 0 });
 
-  const displayRef = useRef<HTMLCanvasElement>(null);
-  const origRef = useRef(document.createElement('canvas'));
-  const tempRef = useRef(document.createElement('canvas'));
-  const layerData = useRef<Map<string, { effect: HTMLCanvasElement; mask: HTMLCanvasElement }>>(new Map());
-  const lastPos = useRef<{ x: number; y: number } | null>(null);
-  const layersRef = useRef(layers);
-  layersRef.current = layers;
+  const [layers, setLayers]               = useState<EffectLayer[]>([]);
+  const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
+  const [dragId, setDragId]               = useState<string | null>(null);
 
-  const sel = layers.find(l => l.id === selId) ?? null;
+  const [tool, setTool]                   = useState<ToolMode>('none');
+  const [brushSize, setBrushSize]         = useState(56);
+  const [isPointerActive, setIsPointerActive] = useState(false);
 
-  /* ─── Canvas helpers ─── */
-  const ensureCanvases = (id: string) => {
-    if (!layerData.current.has(id)) {
-      const w = origRef.current.width || 1;
-      const h = origRef.current.height || 1;
-      const eff = document.createElement('canvas'); eff.width = w; eff.height = h;
-      const msk = document.createElement('canvas'); msk.width = w; msk.height = h;
-      layerData.current.set(id, { effect: eff, mask: msk });
+  const [selectionMode, setSelectionMode] = useState<SelectionCombine>('replace');
+  const [selectionShapes, setSelectionShapes] = useState<SelectionShape[]>([]);
+  const [draftSelection, setDraftSelection]   = useState<DraftSelection | null>(null);
+
+  const [previewFps, setPreviewFps]       = useState(18);
+  const [videoPlaying, setVideoPlaying]   = useState(false);
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [videoCurrent, setVideoCurrent]   = useState(0);
+  const [isRecording, setIsRecording]     = useState(false);
+
+  // Left sidebar section collapse state
+  const [secTools, setSecTools]       = useState(true);
+  const [secLayers, setSecLayers]     = useState(true);
+  const [secInspect, setSecInspect]   = useState(true);
+
+  const displayRef   = useRef<HTMLCanvasElement>(null);
+  const overlayRef   = useRef<HTMLCanvasElement>(null);
+  const hiddenVideoRef = useRef<HTMLVideoElement>(null);
+
+  const origRef      = useRef(document.createElement('canvas'));
+  const tempRef      = useRef(document.createElement('canvas'));
+  const scratchRef   = useRef(document.createElement('canvas'));
+  const selMaskRef   = useRef(document.createElement('canvas'));
+  const layerDataRef = useRef<Map<string, { effect: HTMLCanvasElement; mask: HTMLCanvasElement }>>(new Map());
+
+  const lastPtRef    = useRef<{ x: number; y: number } | null>(null);
+  const objUrlRef    = useRef<string | null>(null);
+  const rafRef       = useRef<number | null>(null);
+  const lastVidRenderRef = useRef(0);
+  const antsRef      = useRef(0);
+  const fpsRef       = useRef(previewFps);
+  const recorderRef  = useRef<MediaRecorder | null>(null);
+  const recStreamRef = useRef<MediaStream | null>(null);
+  const recChunksRef = useRef<Blob[]>([]);
+
+  const layersRef    = useRef(layers);
+  const selShapesRef = useRef(selectionShapes);
+  const draftRef     = useRef(draftSelection);
+
+  useEffect(() => { layersRef.current = layers; }, [layers]);
+  useEffect(() => { selShapesRef.current = selectionShapes; }, [selectionShapes]);
+  useEffect(() => { draftRef.current = draftSelection; }, [draftSelection]);
+  useEffect(() => { fpsRef.current = previewFps; }, [previewFps]);
+
+  const selectedLayer = layers.find(l => l.id === selectedLayerId) ?? null;
+  const hasSelection  = selectionShapes.length > 0;
+  const canPaint      = !!selectedLayer && selectedLayer.useMask && (tool === 'brush' || tool === 'erase');
+
+  /* ── buffer helpers ── */
+  const ensureLayerBuffers = useCallback((id: string) => {
+    const W = Math.max(1, origRef.current.width);
+    const H = Math.max(1, origRef.current.height);
+    if (!layerDataRef.current.has(id)) {
+      const effect = document.createElement('canvas');
+      const mask   = document.createElement('canvas');
+      effect.width = W; effect.height = H;
+      mask.width   = W; mask.height   = H;
+      layerDataRef.current.set(id, { effect, mask });
     }
-    return layerData.current.get(id)!;
-  };
+    const d = layerDataRef.current.get(id)!;
+    ensureSize(d.effect, W, H);
+    ensureSize(d.mask,   W, H);
+    return d;
+  }, []);
 
-  const genEffect = useCallback((layer: EffectLayer) => {
-    const orig = origRef.current;
-    if (!orig.width) return;
-    const { effect } = ensureCanvases(layer.id);
-    const w = orig.width, h = orig.height;
-    if (effect.width !== w || effect.height !== h) { effect.width = w; effect.height = h; }
-    const ctx = effect.getContext('2d')!;
-    ctx.clearRect(0, 0, w, h);
+  const clearSelMask = useCallback(() => {
+    const c = selMaskRef.current;
+    const ctx = c.getContext('2d');
+    if (ctx) ctx.clearRect(0, 0, c.width, c.height);
+  }, []);
 
-    if (layer.type === 'dither') {
-      const s = layer.settings as DitherSettings;
-      const sw = Math.max(1, Math.floor(w / s.pixelSize));
-      const sh = Math.max(1, Math.floor(h / s.pixelSize));
-      const sm = document.createElement('canvas'); sm.width = sw; sm.height = sh;
-      const sCtx = sm.getContext('2d', { willReadFrequently: true })!;
-      sCtx.drawImage(orig, 0, 0, sw, sh);
-      const d = sCtx.getImageData(0, 0, sw, sh);
-      processDither(d, s.matrixSize, s.brightness, s.contrast, s.darkColor, s.lightColor);
-      sCtx.putImageData(d, 0, 0);
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(sm, 0, 0, w, h);
-    } else if (layer.type === 'glow') {
-      const s = layer.settings as GlowSettings;
-      const g = processGlow(orig, s.radius, s.intensity, s.threshold, s.color);
-      ctx.drawImage(g, 0, 0);
-    } else {
-      const s = layer.settings as HalftoneSettings;
-      const ht = processHalftone(orig, s.cellSize, s.exposure, s.gamma, s.darkColor, s.lightColor);
-      ctx.drawImage(ht, 0, 0);
+  /* ── marching ants overlay ── */
+  const redrawOverlay = useCallback(() => {
+    const overlay = overlayRef.current;
+    const W = origRef.current.width;
+    const H = origRef.current.height;
+    if (!overlay || !W || !H) return;
+    ensureSize(overlay, W, H);
+    const ctx = overlay.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, W, H);
+
+    const shapes = selShapesRef.current;
+    const draft  = draftRef.current;
+
+    if (shapes.length > 0) {
+      ctx.save();
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.drawImage(selMaskRef.current, 0, 0);
+      ctx.restore();
+    }
+
+    const drawAnts = (shape: SelectionShape, light = '#fff') => {
+      ctx.save();
+      drawSelectionPath(ctx, shape);
+      ctx.lineWidth = 1.2;
+      ctx.setLineDash([6, 6]);
+      ctx.lineDashOffset = -antsRef.current;
+      ctx.strokeStyle = light;
+      ctx.stroke();
+      ctx.lineDashOffset = -(antsRef.current + 6);
+      ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+      ctx.stroke();
+      ctx.restore();
+    };
+
+    shapes.forEach(s => drawAnts(s, s.combine === 'subtract' ? '#aaa' : '#fff'));
+
+    if (draft) {
+      const ds = draftToShape(draft);
+      ctx.save();
+      drawSelectionPath(ctx, ds);
+      ctx.fillStyle = 'rgba(255,255,255,0.06)';
+      ctx.fill();
+      ctx.restore();
+      drawAnts(ds as SelectionShape, '#ccc');
     }
   }, []);
 
+  /* ── composite ── */
   const composite = useCallback(() => {
-    const ctx = displayRef.current?.getContext('2d');
-    if (!ctx) return;
-    const orig = origRef.current;
-    if (!orig.width) return;
-    const w = orig.width, h = orig.height;
-    const tmp = tempRef.current;
-    if (tmp.width !== w || tmp.height !== h) { tmp.width = w; tmp.height = h; }
+    const output = displayRef.current;
+    const src    = origRef.current;
+    if (!output || !src.width || !src.height) return;
+    ensureSize(output, src.width, src.height);
+    ensureSize(tempRef.current, src.width, src.height);
 
-    ctx.clearRect(0, 0, w, h);
-    ctx.drawImage(orig, 0, 0);
+    const out  = output.getContext('2d')!;
+    const temp = tempRef.current.getContext('2d')!;
+
+    out.clearRect(0, 0, src.width, src.height);
+    out.drawImage(src, 0, 0);
 
     for (const layer of layersRef.current) {
       if (!layer.enabled) continue;
-      const d = layerData.current.get(layer.id);
+      const d = layerDataRef.current.get(layer.id);
       if (!d) continue;
 
-      ctx.save();
-      ctx.globalCompositeOperation = layer.blendMode as GlobalCompositeOperation;
-      ctx.globalAlpha = layer.opacity;
+      temp.clearRect(0, 0, src.width, src.height);
+      temp.globalCompositeOperation = 'source-over';
+      temp.globalAlpha = 1;
+      temp.drawImage(d.effect, 0, 0);
+
+      // alpha-aware: clip effect to source alpha
+      temp.globalCompositeOperation = 'destination-in';
+      temp.drawImage(src, 0, 0);
 
       if (layer.useMask) {
-        const tCtx = tmp.getContext('2d')!;
-        tCtx.clearRect(0, 0, w, h);
-        tCtx.globalCompositeOperation = 'source-over';
-        tCtx.drawImage(d.mask, 0, 0);
-        tCtx.globalCompositeOperation = 'source-in';
-        tCtx.drawImage(d.effect, 0, 0);
-        tCtx.globalCompositeOperation = 'source-over';
-        ctx.drawImage(tmp, 0, 0);
-      } else {
-        ctx.drawImage(d.effect, 0, 0);
+        temp.globalCompositeOperation = 'destination-in';
+        temp.drawImage(d.mask, 0, 0);
       }
-      ctx.restore();
+      temp.globalCompositeOperation = 'source-over';
+
+      out.save();
+      out.globalAlpha = layer.opacity;
+      out.globalCompositeOperation = layer.blendMode as GlobalCompositeOperation;
+      out.drawImage(tempRef.current, 0, 0);
+      out.restore();
     }
   }, []);
 
-  const regenAll = useCallback(() => {
-    layersRef.current.forEach(l => { if (l.enabled) genEffect(l); });
+  /* ── generate effect for one layer ── */
+  const generateEffect = useCallback((layer: EffectLayer) => {
+    const src = origRef.current;
+    if (!src.width || !src.height) return;
+    const { effect } = ensureLayerBuffers(layer.id);
+    ensureSize(effect, src.width, src.height);
+    const ctx = effect.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, effect.width, effect.height);
+
+    if (layer.type === 'dither') {
+      const s = layer.settings as DitherSettings;
+      const sw = Math.max(1, Math.floor(src.width  / s.pixelSize));
+      const sh = Math.max(1, Math.floor(src.height / s.pixelSize));
+      const sm = document.createElement('canvas');
+      sm.width = sw; sm.height = sh;
+      const sc = sm.getContext('2d', { willReadFrequently: true })!;
+      sc.drawImage(src, 0, 0, sw, sh);
+      const id = sc.getImageData(0, 0, sw, sh);
+      processDither(id, s.matrixSize, s.brightness, s.contrast, s.darkColor, s.lightColor);
+      sc.putImageData(id, 0, 0);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(sm, 0, 0, src.width, src.height);
+    } else if (layer.type === 'glow') {
+      const s = layer.settings as GlowSettings;
+      ctx.drawImage(processGlow(src, s.radius, s.intensity, s.threshold, s.color), 0, 0);
+    } else if (layer.type === 'halftone') {
+      const s = layer.settings as HalftoneSettings;
+      ctx.drawImage(processHalftone(src, s.cellSize, s.exposure, s.gamma, s.darkColor, s.lightColor), 0, 0);
+    } else if (layer.type === 'lego') {
+      const s = layer.settings as LegoSettings;
+      ctx.drawImage(processLego(src, s.brickSize, s.saturation, s.brightness, s.studOpacity, s.quantize, s.borderWidth), 0, 0);
+    }
+  }, [ensureLayerBuffers]);
+
+  const regenerateAll = useCallback(() => {
+    if (!origRef.current.width || !origRef.current.height) return;
+    layersRef.current.forEach(l => { ensureLayerBuffers(l.id); if (l.enabled) generateEffect(l); });
     composite();
-  }, [genEffect, composite]);
+    redrawOverlay();
+  }, [composite, ensureLayerBuffers, generateEffect, redrawOverlay]);
 
-  /* ─── Image upload ─── */
-  const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    const r = new FileReader();
-    r.onload = ev => { if (ev.target?.result) setImageSrc(ev.target.result as string); };
-    r.readAsDataURL(f);
-  };
+  /* ── video loop ── */
+  const stopLoop = useCallback(() => {
+    if (rafRef.current !== null) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+  }, []);
 
-  useEffect(() => {
-    if (!imageSrc) return;
-    const img = new Image();
-    img.src = imageSrc;
-    img.onload = () => {
-      const w = img.width, h = img.height;
-      origRef.current.width = w; origRef.current.height = h;
-      origRef.current.getContext('2d')!.drawImage(img, 0, 0);
-      tempRef.current.width = w; tempRef.current.height = h;
-      if (displayRef.current) { displayRef.current.width = w; displayRef.current.height = h; }
+  const renderVideoFrame = useCallback(() => {
+    const vid = hiddenVideoRef.current;
+    if (!vid || vid.readyState < 2) return;
+    const W = vid.videoWidth  || origRef.current.width;
+    const H = vid.videoHeight || origRef.current.height;
+    if (!W || !H) return;
+    ensureSize(origRef.current, W, H);
+    const ctx = origRef.current.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, W, H);
+    ctx.drawImage(vid, 0, 0, W, H);
+    setVideoCurrent(vid.currentTime || 0);
+    regenerateAll();
+  }, [regenerateAll]);
 
-      layerData.current.clear();
-      if (layersRef.current.length === 0) {
-        const d = defaultDither();
-        setLayers([d]);
-        setSelId(d.id);
-      } else {
-        layersRef.current.forEach(l => {
-          const c = ensureCanvases(l.id);
-          c.effect.width = w; c.effect.height = h;
-          c.mask.width = w; c.mask.height = h;
-        });
-        regenAll();
-      }
+  const startLoop = useCallback(() => {
+    stopLoop();
+    lastVidRenderRef.current = 0;
+    const tick = (t: number) => {
+      const vid = hiddenVideoRef.current;
+      if (!vid || vid.paused || vid.ended) { stopLoop(); setVideoPlaying(false); renderVideoFrame(); return; }
+      const gap = 1000 / Math.max(1, fpsRef.current);
+      if (t - lastVidRenderRef.current >= gap) { renderVideoFrame(); lastVidRenderRef.current = t; }
+      rafRef.current = requestAnimationFrame(tick);
     };
-  }, [imageSrc]);
+    rafRef.current = requestAnimationFrame(tick);
+  }, [renderVideoFrame, stopLoop]);
 
-  /* ─── React to layer state changes ─── */
+  /* ── prepare source canvas ── */
+  const prepareSource = useCallback((W: number, H: number, draw: (ctx: CanvasRenderingContext2D) => void) => {
+    ensureSize(origRef.current, W, H);
+    ensureSize(tempRef.current, W, H);
+    ensureSize(scratchRef.current, W, H);
+    ensureSize(selMaskRef.current, W, H);
+    if (displayRef.current) ensureSize(displayRef.current, W, H);
+    if (overlayRef.current) ensureSize(overlayRef.current, W, H);
+
+    const ctx = origRef.current.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, W, H);
+    draw(ctx);
+
+    setMediaSize({ width: W, height: H });
+    setSourceHasAlpha(detectTransparency(origRef.current));
+
+    layerDataRef.current.clear();
+    clearSelMask();
+    setSelectionShapes([]); selShapesRef.current = [];
+    setDraftSelection(null); draftRef.current = null;
+
+    if (layersRef.current.length === 0) {
+      const base = defaultDither();
+      setLayers([base]); setSelectedLayerId(base.id);
+    } else {
+      layersRef.current.forEach(l => ensureLayerBuffers(l.id));
+    }
+
+    setSourceReady(true);
+    redrawOverlay();
+
+    if (layersRef.current.length > 0) regenerateAll(); else composite();
+  }, [clearSelMask, composite, ensureLayerBuffers, redrawOverlay, regenerateAll]);
+
+  /* ── upload handler ── */
+  const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    stopLoop();
+    if (recorderRef.current?.state === 'recording') recorderRef.current.stop();
+    setVideoPlaying(false);
+    if (objUrlRef.current) { URL.revokeObjectURL(objUrlRef.current); objUrlRef.current = null; }
+    const url = URL.createObjectURL(file);
+    objUrlRef.current = url;
+    setSourceName(file.name);
+    setSourceReady(false);
+    setSourceKind(file.type.startsWith('video/') ? 'video' : 'image');
+    setSourceUrl(url);
+    e.target.value = '';
+  };
+
+  /* ── source url → canvas ── */
   useEffect(() => {
-    if (!imageSrc) return;
-    const t = setTimeout(() => {
-      layersRef.current.forEach(l => ensureCanvases(l.id));
-      regenAll();
-    }, 40);
-    return () => clearTimeout(t);
-  }, [layers, imageSrc, regenAll]);
+    if (!sourceUrl || !sourceKind) return;
+    stopLoop();
+    setVideoPlaying(false); setVideoDuration(0); setVideoCurrent(0); setSourceReady(false);
 
-  /* ─── Layer ops ─── */
-  const addLayer = (type: 'dither' | 'glow' | 'halftone') => {
-    const l = type === 'dither' ? defaultDither() : type === 'glow' ? defaultGlow() : defaultHalftone();
-    setLayers(p => [...p, l]);
-    setSelId(l.id);
+    if (sourceKind === 'image') {
+      const img = new Image();
+      img.onload = () => prepareSource(img.naturalWidth, img.naturalHeight, ctx => ctx.drawImage(img, 0, 0));
+      img.src = sourceUrl;
+      return () => { img.onload = null; };
+    }
+
+    const vid = hiddenVideoRef.current;
+    if (!vid) return;
+
+    const onLoaded = () => {
+      const W = vid.videoWidth || 1, H = vid.videoHeight || 1;
+      prepareSource(W, H, ctx => ctx.drawImage(vid, 0, 0, W, H));
+      setVideoDuration(vid.duration || 0);
+      setVideoCurrent(vid.currentTime || 0);
+      setSourceHasAlpha(false);
+    };
+    const onPlay    = () => { setVideoPlaying(true);  startLoop(); };
+    const onPause   = () => { setVideoPlaying(false); stopLoop(); renderVideoFrame(); };
+    const onEnded   = () => { setVideoPlaying(false); stopLoop(); renderVideoFrame(); if (recorderRef.current?.state === 'recording') recorderRef.current.stop(); };
+
+    vid.addEventListener('loadeddata', onLoaded);
+    vid.addEventListener('play', onPlay);
+    vid.addEventListener('pause', onPause);
+    vid.addEventListener('ended', onEnded);
+    vid.src = sourceUrl;
+    vid.load();
+
+    return () => {
+      vid.pause(); stopLoop();
+      vid.removeEventListener('loadeddata', onLoaded);
+      vid.removeEventListener('play', onPlay);
+      vid.removeEventListener('pause', onPause);
+      vid.removeEventListener('ended', onEnded);
+    };
+  }, [prepareSource, renderVideoFrame, sourceKind, sourceUrl, startLoop, stopLoop]);
+
+  /* ── regenerate on layer settings change ── */
+  useEffect(() => {
+    if (!sourceReady) return;
+    const t = window.setTimeout(() => {
+      layersRef.current.forEach(l => ensureLayerBuffers(l.id));
+      regenerateAll();
+    }, 35);
+    return () => window.clearTimeout(t);
+  }, [ensureLayerBuffers, layers, regenerateAll, sourceReady]);
+
+  /* ── overlay refresh ── */
+  useEffect(() => { redrawOverlay(); }, [draftSelection, redrawOverlay, selectionShapes, sourceReady, tool]);
+
+  /* ── marching ants animation ── */
+  useEffect(() => {
+    const iv = window.setInterval(() => { antsRef.current = (antsRef.current + 1) % 12; redrawOverlay(); }, 80);
+    return () => window.clearInterval(iv);
+  }, [redrawOverlay]);
+
+  /* ── cleanup ── */
+  useEffect(() => {
+    return () => {
+      stopLoop();
+      if (recorderRef.current?.state === 'recording') recorderRef.current.stop();
+      if (objUrlRef.current) URL.revokeObjectURL(objUrlRef.current);
+      recStreamRef.current?.getTracks().forEach(t => t.stop());
+    };
+  }, [stopLoop]);
+
+  /* ─── layer management ─── */
+  const addLayer = (type: LayerType) => {
+    const l = type === 'dither' ? defaultDither() : type === 'glow' ? defaultGlow() : type === 'halftone' ? defaultHalftone() : defaultLego();
+    setLayers(prev => [...prev, l]);
+    setSelectedLayerId(l.id);
   };
+
   const removeLayer = (id: string) => {
-    layerData.current.delete(id);
-    setLayers(p => p.filter(l => l.id !== id));
-    if (selId === id) setSelId(null);
+    const cur = layersRef.current;
+    const idx = cur.findIndex(l => l.id === id);
+    const next = cur.filter(l => l.id !== id);
+    layerDataRef.current.delete(id);
+    setLayers(next);
+    if (selectedLayerId === id) {
+      const rep = next[Math.max(0, Math.min(idx - 1, next.length - 1))] ?? next[next.length - 1] ?? null;
+      setSelectedLayerId(rep?.id ?? null);
+    }
   };
+
   const moveLayer = (id: string, dir: 1 | -1) => {
-    setLayers(p => {
-      const i = p.findIndex(l => l.id === id);
-      const j = i + dir;
-      if (j < 0 || j >= p.length) return p;
-      const n = [...p]; [n[i], n[j]] = [n[j], n[i]]; return n;
+    setLayers(prev => {
+      const i = prev.findIndex(l => l.id === id);
+      const ni = i + dir;
+      if (i === -1 || ni < 0 || ni >= prev.length) return prev;
+      const n = [...prev]; [n[i], n[ni]] = [n[ni], n[i]]; return n;
     });
   };
-  const patchLayer = (id: string, u: Partial<EffectLayer>) =>
-    setLayers(p => p.map(l => l.id === id ? { ...l, ...u } : l));
-  const patchSettings = (id: string, u: Record<string, unknown>) =>
-    setLayers(p => p.map(l => l.id === id ? { ...l, settings: { ...l.settings, ...u } } : l));
 
-  /* ─── Mask ops ─── */
+  const patchLayer = (id: string, up: Partial<EffectLayer>) =>
+    setLayers(prev => prev.map(l => l.id === id ? { ...l, ...up } : l));
+
+  const patchSettings = (id: string, up: Record<string, unknown>) =>
+    setLayers(prev => prev.map(l => l.id === id ? { ...l, settings: { ...l.settings, ...up } } : l));
+
+  const chooseTool = (next: ToolMode) => {
+    setTool(next);
+    if ((next === 'brush' || next === 'erase') && selectedLayerId) patchLayer(selectedLayerId, { useMask: true });
+  };
+
   const clearMask = () => {
-    if (!selId) return;
-    const d = layerData.current.get(selId);
-    if (!d) return;
-    d.mask.getContext('2d')!.clearRect(0, 0, d.mask.width, d.mask.height);
-    composite();
-  };
-  const fillMask = () => {
-    if (!selId) return;
-    const d = layerData.current.get(selId);
-    if (!d) return;
-    const c = d.mask.getContext('2d')!;
-    c.fillStyle = 'white';
-    c.fillRect(0, 0, d.mask.width, d.mask.height);
+    if (!selectedLayerId) return;
+    const d = ensureLayerBuffers(selectedLayerId);
+    const ctx = d.mask.getContext('2d');
+    if (ctx) ctx.clearRect(0, 0, d.mask.width, d.mask.height);
     composite();
   };
 
-  /* ─── Drawing ─── */
-  const pos = (e: React.PointerEvent) => {
-    const c = displayRef.current!;
+  const fillMask = () => {
+    if (!selectedLayerId) return;
+    const d = ensureLayerBuffers(selectedLayerId);
+    const ctx = d.mask.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, d.mask.width, d.mask.height);
+    ctx.fillStyle = 'white'; ctx.fillRect(0, 0, d.mask.width, d.mask.height);
+    composite();
+  };
+
+  const clearSelection = () => {
+    clearSelMask(); setSelectionShapes([]); selShapesRef.current = [];
+    setDraftSelection(null); draftRef.current = null; redrawOverlay();
+  };
+
+  const selectAll = () => {
+    if (!origRef.current.width || !origRef.current.height) return;
+    clearSelMask();
+    const ctx = selMaskRef.current.getContext('2d');
+    if (!ctx) return;
+    ctx.fillStyle = 'white'; ctx.fillRect(0, 0, selMaskRef.current.width, selMaskRef.current.height);
+    const shape: SelectionShape = { id: uid(), type: 'rect', combine: 'replace', x: 0, y: 0, w: origRef.current.width, h: origRef.current.height };
+    setSelectionShapes([shape]); selShapesRef.current = [shape]; redrawOverlay();
+  };
+
+  const commitDraft = (draft: DraftSelection) => {
+    const shape = draftToShape(draft);
+    if (shape.w < 3 || shape.h < 3) return;
+    const canvas = selMaskRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    if (draft.combine === 'replace') ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.fillStyle = 'white';
+    ctx.globalCompositeOperation = draft.combine === 'subtract' ? 'destination-out' : 'source-over';
+    drawSelectionPath(ctx, shape);
+    ctx.fill();
+    ctx.restore();
+    const next = draft.combine === 'replace' ? [{ ...shape, id: uid() }] : [...selShapesRef.current, { ...shape, id: uid() }];
+    setSelectionShapes(next); selShapesRef.current = next;
+  };
+
+  const applySelToMask = (mode: 'replace' | 'add' | 'subtract') => {
+    if (!selectedLayerId || !hasSelection) return;
+    const d = ensureLayerBuffers(selectedLayerId);
+    const ctx = d.mask.getContext('2d');
+    if (!ctx) return;
+    patchLayer(selectedLayerId, { useMask: true });
+    if (mode === 'replace') { ctx.clearRect(0, 0, d.mask.width, d.mask.height); ctx.globalCompositeOperation = 'source-over'; ctx.drawImage(selMaskRef.current, 0, 0); }
+    else if (mode === 'add') { ctx.globalCompositeOperation = 'source-over'; ctx.drawImage(selMaskRef.current, 0, 0); }
+    else { ctx.globalCompositeOperation = 'destination-out'; ctx.drawImage(selMaskRef.current, 0, 0); ctx.globalCompositeOperation = 'source-over'; }
+    ctx.globalCompositeOperation = 'source-over';
+    composite();
+  };
+
+  /* ── pointer events ── */
+  const getCanvasPt = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const c = overlayRef.current || displayRef.current;
+    if (!c) return { x: 0, y: 0 };
     const r = c.getBoundingClientRect();
     return { x: (e.clientX - r.left) * (c.width / r.width), y: (e.clientY - r.top) * (c.height / r.height) };
   };
-  const canPaint = sel?.useMask && brushMode !== 'none';
 
-  const onDown = (e: React.PointerEvent) => {
-    if (!canPaint) return;
-    setIsDrawing(true);
-    const p = pos(e);
-    lastPos.current = p;
-    paint(p, p);
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-  };
-  const onMove = (e: React.PointerEvent) => {
-    if (!isDrawing) return;
-    const p = pos(e);
-    if (lastPos.current) paint(lastPos.current, p);
-    lastPos.current = p;
-  };
-  const onUp = (e: React.PointerEvent) => {
-    setIsDrawing(false);
-    lastPos.current = null;
-    (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-  };
-  const paint = (from: { x: number; y: number }, to: { x: number; y: number }) => {
-    if (!selId) return;
-    const d = layerData.current.get(selId);
-    if (!d) return;
-    const c = d.mask.getContext('2d')!;
-    c.lineCap = 'round'; c.lineJoin = 'round'; c.lineWidth = brushSize;
-    if (brushMode === 'brush') {
-      c.globalCompositeOperation = 'source-over'; c.strokeStyle = 'white';
-    } else {
-      c.globalCompositeOperation = 'destination-out'; c.strokeStyle = 'rgba(0,0,0,1)';
+  const paintLine = (from: { x: number; y: number }, to: { x: number; y: number }) => {
+    if (!selectedLayerId) return;
+    const d = ensureLayerBuffers(selectedLayerId);
+    const sc = scratchRef.current;
+    ensureSize(sc, d.mask.width, d.mask.height);
+    const sCtx = sc.getContext('2d')!;
+    const mCtx = d.mask.getContext('2d')!;
+    sCtx.clearRect(0, 0, sc.width, sc.height);
+    sCtx.lineCap = 'round'; sCtx.lineJoin = 'round';
+    sCtx.lineWidth = brushSize; sCtx.strokeStyle = 'white';
+    sCtx.beginPath(); sCtx.moveTo(from.x, from.y); sCtx.lineTo(to.x, to.y); sCtx.stroke();
+    if (selShapesRef.current.length > 0) {
+      sCtx.globalCompositeOperation = 'destination-in';
+      sCtx.drawImage(selMaskRef.current, 0, 0);
+      sCtx.globalCompositeOperation = 'source-over';
     }
-    c.beginPath(); c.moveTo(from.x, from.y); c.lineTo(to.x, to.y); c.stroke();
-    c.globalCompositeOperation = 'source-over';
+    if (tool === 'brush') { mCtx.globalCompositeOperation = 'source-over'; mCtx.drawImage(sc, 0, 0); }
+    else { mCtx.globalCompositeOperation = 'destination-out'; mCtx.drawImage(sc, 0, 0); mCtx.globalCompositeOperation = 'source-over'; }
     composite();
   };
 
-  /* ─── Drag reorder ─── */
-  const onDragStart = (e: React.DragEvent, id: string) => {
-    setDragId(id);
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', id);
+  const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!sourceReady) return;
+    const pt = getCanvasPt(e);
+    lastPtRef.current = pt;
+    setIsPointerActive(true);
+    e.currentTarget.setPointerCapture(e.pointerId);
+    if (tool === 'brush' || tool === 'erase') { if (canPaint) paintLine(pt, pt); return; }
+    if (tool === 'select-rect' || tool === 'select-ellipse') {
+      setDraftSelection({ type: tool === 'select-rect' ? 'rect' : 'ellipse', combine: selectionMode, startX: pt.x, startY: pt.y, endX: pt.x, endY: pt.y });
+    }
   };
-  const onDragOver = (e: React.DragEvent, targetId: string) => {
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!isPointerActive) return;
+    const pt = getCanvasPt(e);
+    if ((tool === 'brush' || tool === 'erase') && canPaint) {
+      if (lastPtRef.current) paintLine(lastPtRef.current, pt);
+      lastPtRef.current = pt; return;
+    }
+    if ((tool === 'select-rect' || tool === 'select-ellipse') && draftRef.current) {
+      const nd = { ...draftRef.current, endX: pt.x, endY: pt.y };
+      draftRef.current = nd; setDraftSelection(nd);
+    }
+  };
+
+  const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    setIsPointerActive(false);
+    const ad = draftRef.current;
+    if ((tool === 'select-rect' || tool === 'select-ellipse') && ad) {
+      commitDraft(ad); setDraftSelection(null); draftRef.current = null; redrawOverlay();
+    }
+    lastPtRef.current = null;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
+  };
+
+  /* ── drag & drop layers ── */
+  const handleDragStart = (e: React.DragEvent, id: string) => { setDragId(id); e.dataTransfer.effectAllowed = 'move'; };
+  const handleDragOver  = (e: React.DragEvent, targetId: string) => {
     e.preventDefault();
     if (!dragId || dragId === targetId) return;
-    setLayers(p => {
-      const di = p.findIndex(l => l.id === dragId);
-      const ti = p.findIndex(l => l.id === targetId);
-      if (di === -1 || ti === -1) return p;
-      const n = [...p]; const [d] = n.splice(di, 1); n.splice(ti, 0, d); return n;
+    setLayers(prev => {
+      const di = prev.findIndex(l => l.id === dragId);
+      const ti = prev.findIndex(l => l.id === targetId);
+      if (di === -1 || ti === -1) return prev;
+      const n = [...prev]; const [dl] = n.splice(di, 1); n.splice(ti, 0, dl); return n;
     });
   };
-  const onDragEnd = () => setDragId(null);
+  const handleDragEnd = () => setDragId(null);
 
-  /* ─── Download ─── */
-  const download = () => {
+  /* ── download ── */
+  const downloadFrame = () => {
     if (!displayRef.current) return;
     const a = document.createElement('a');
-    a.download = 'halftone-studio.png';
+    a.download = `${sanitizeFileBase(sourceName)}-processed.png`;
     a.href = displayRef.current.toDataURL('image/png');
     a.click();
   };
 
-  /* ─── Render ─── */
-  const ds = sel?.type === 'dither' ? sel.settings as DitherSettings : null;
-  const gs = sel?.type === 'glow' ? sel.settings as GlowSettings : null;
-  const hs = sel?.type === 'halftone' ? sel.settings as HalftoneSettings : null;
+  /* ── video controls ── */
+  const togglePlay = async () => {
+    const v = hiddenVideoRef.current;
+    if (!v) return;
+    if (v.paused || v.ended) { if (v.ended) v.currentTime = 0; try { await v.play(); } catch { /**/ } }
+    else v.pause();
+  };
 
+  const seekVideo = (t: number) => {
+    const v = hiddenVideoRef.current;
+    if (!v) return;
+    v.currentTime = t; setVideoCurrent(t);
+    if (v.paused) window.setTimeout(() => renderVideoFrame(), 0);
+  };
+
+  const exportVideo = async () => {
+    const canvas = displayRef.current;
+    const vid    = hiddenVideoRef.current;
+    if (!canvas || !vid || typeof MediaRecorder === 'undefined') return;
+    if (isRecording) return;
+
+    const stream = canvas.captureStream(Math.max(12, fpsRef.current));
+    recStreamRef.current = stream;
+    recChunksRef.current = [];
+
+    const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9'
+               : MediaRecorder.isTypeSupported('video/webm;codecs=vp8') ? 'video/webm;codecs=vp8'
+               : 'video/webm';
+
+    const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 });
+    recorderRef.current = rec;
+    rec.ondataavailable = ev => { if (ev.data.size > 0) recChunksRef.current.push(ev.data); };
+    rec.onstop = () => {
+      const blob = new Blob(recChunksRef.current, { type: mime });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href = url; a.download = `${sanitizeFileBase(sourceName)}-processed.webm`; a.click();
+      URL.revokeObjectURL(url);
+      recStreamRef.current?.getTracks().forEach(t => t.stop());
+      recStreamRef.current = null; recorderRef.current = null; setIsRecording(false);
+    };
+
+    setIsRecording(true);
+    vid.pause(); vid.currentTime = 0; renderVideoFrame();
+    rec.start();
+    try { await vid.play(); } catch { rec.stop(); setIsRecording(false); }
+  };
+
+  /* ── derived ── */
+  const dither   = selectedLayer?.type === 'dither'   ? selectedLayer.settings as DitherSettings   : null;
+  const glow     = selectedLayer?.type === 'glow'     ? selectedLayer.settings as GlowSettings     : null;
+  const halftone = selectedLayer?.type === 'halftone' ? selectedLayer.settings as HalftoneSettings : null;
+  const lego     = selectedLayer?.type === 'lego'     ? selectedLayer.settings as LegoSettings     : null;
+
+  const cursor = tool === 'brush' || tool === 'erase' ? 'crosshair'
+               : tool === 'select-rect' || tool === 'select-ellipse' ? 'cell' : 'default';
+
+  /* ── render ── */
   return (
-    <div className="h-screen bg-neutral-950 text-neutral-100 flex flex-col md:flex-row font-sans overflow-hidden">
+    <div className="flex h-screen overflow-hidden bg-black text-white select-none">
 
-      {/* ═══ SIDEBAR ═══ */}
-      <div className="w-full md:w-[340px] bg-neutral-900 border-b md:border-b-0 md:border-r border-neutral-800 flex flex-col shrink-0 z-10 overflow-y-auto">
-        <div className="p-4 space-y-4 flex-1">
+      {/* ── Left sidebar ── */}
+      <aside className="flex h-full w-[300px] shrink-0 flex-col border-r border-[#1a1a1a]">
 
-          {/* Header */}
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-[#1a1a1a] shrink-0">
           <div>
-            <h1 className="text-lg font-bold tracking-tight text-white flex items-center gap-2">
-              <Layers size={18} className="text-indigo-400" /> Halftone Studio
-            </h1>
-            <p className="text-[11px] text-neutral-500 mt-0.5">Layered effects · Masks · Blend modes</p>
+            <div className="logo-text text-[22px] leading-none tracking-[-0.05em]">.eana studio</div>
+            <div className="text-[10px] text-[#444] font-medium tracking-[0.18em] uppercase mt-1">Effects Editor</div>
           </div>
-
-          {/* Upload */}
-          <label className="flex items-center justify-center gap-2 w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg cursor-pointer transition-colors text-sm font-medium">
-            <Upload size={15} /> Upload Photo
-            <input type="file" className="hidden" accept="image/*" onChange={handleUpload} />
+          <label className="btn btn-solid text-[11px] px-3 py-1.5 cursor-pointer">
+            <Upload size={13} />
+            <span>Open</span>
+            <input type="file" className="hidden" accept="image/*,video/*" onChange={handleUpload} />
           </label>
+        </div>
 
-          {imageSrc && (
-            <>
-              {/* ── LAYERS PANEL ── */}
+        {/* Scrollable content */}
+        <div className="flex-1 overflow-y-auto surface-scroll">
+
+          {/* Media info */}
+          {sourceUrl && (
+            <div className="px-4 py-3 border-b border-[#1a1a1a]">
+              <div className="flex items-center gap-2 text-[11px] text-[#555]">
+                <span className="truncate flex-1 text-[#888]">{sourceName || '—'}</span>
+                {sourceKind && <span className="tag tag-white">{sourceKind}</span>}
+              </div>
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {mediaSize.width > 0 && (
+                  <span className="tag tag-white">{mediaSize.width}×{mediaSize.height}</span>
+                )}
+                {sourceHasAlpha && (
+                  <span className="tag tag-white">alpha</span>
+                )}
+                {sourceKind === 'video' && (
+                  <span className="tag tag-white">{formatTime(videoDuration)}</span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Video controls */}
+          {sourceKind === 'video' && sourceReady && (
+            <div className="px-4 py-3 border-b border-[#1a1a1a]">
+              <div className="flex items-center gap-2 mb-2">
+                <Film size={12} className="text-[#555]" />
+                <span className="text-[11px] text-[#555] font-medium tracking-wide uppercase">Video</span>
+                <div className="flex-1" />
+                <button onClick={togglePlay} className="btn btn-ghost text-[11px] px-2 py-1">
+                  {videoPlaying ? <Pause size={11} /> : <Play size={11} />}
+                  {videoPlaying ? 'Pause' : 'Play'}
+                </button>
+              </div>
               <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-[10px] font-semibold text-neutral-500 uppercase tracking-widest">Layers</h3>
-                  <div className="flex gap-1">
-                    <button
-                      onClick={() => addLayer('dither')}
-                      className="flex items-center gap-1 text-[10px] px-2 py-1 rounded bg-purple-600/20 text-purple-300 hover:bg-purple-600/40 transition-colors border border-purple-500/20"
-                    >
-                      <Grid3X3 size={10} /> + Dither
-                    </button>
-                    <button
-                      onClick={() => addLayer('glow')}
-                      className="flex items-center gap-1 text-[10px] px-2 py-1 rounded bg-amber-600/20 text-amber-300 hover:bg-amber-600/40 transition-colors border border-amber-500/20"
-                    >
-                      <Sparkles size={10} /> + Glow
-                    </button>
-                      <button
-                        onClick={() => addLayer('halftone')}
-                        className="flex items-center gap-1 text-[10px] px-2 py-1 rounded bg-cyan-600/20 text-cyan-300 hover:bg-cyan-600/40 transition-colors border border-cyan-500/20"
-                      >
-                        <Circle size={10} /> + Halftone
-                      </button>
+                <SliderRow label="FPS Preview" value={previewFps} min={6} max={30} step={1} display={`${previewFps}`} onChange={setPreviewFps} />
+                <div>
+                  <div className="flex justify-between text-[10px] text-[#444] mb-1">
+                    <span>Timeline</span>
+                    <span>{formatTime(videoCurrent)} / {formatTime(videoDuration)}</span>
                   </div>
-                </div>
-
-                <div className="bg-neutral-950 rounded-lg border border-neutral-800 overflow-hidden">
-                  {layers.length === 0 && (
-                    <div className="px-3 py-6 text-center text-xs text-neutral-600">
-                      No layers yet. Add one above.
-                    </div>
-                  )}
-                  {[...layers].reverse().map(layer => (
-                    <div
-                      key={layer.id}
-                      draggable
-                      onDragStart={e => onDragStart(e, layer.id)}
-                      onDragOver={e => onDragOver(e, layer.id)}
-                      onDragEnd={onDragEnd}
-                      onClick={() => setSelId(layer.id)}
-                      className={cn(
-                        'flex items-center gap-1.5 px-2 py-2 cursor-pointer transition-all text-xs border-l-2 select-none',
-                        selId === layer.id
-                          ? 'bg-indigo-500/10 border-indigo-500'
-                          : 'border-transparent hover:bg-neutral-800/60',
-                        dragId === layer.id && 'opacity-40',
-                      )}
-                    >
-                      <GripVertical size={12} className="text-neutral-600 cursor-grab shrink-0" />
-
-                      <button
-                        onClick={e => { e.stopPropagation(); patchLayer(layer.id, { enabled: !layer.enabled }); }}
-                        className="text-neutral-500 hover:text-white transition-colors shrink-0"
-                      >
-                        {layer.enabled ? <Eye size={13} /> : <EyeOff size={13} />}
-                      </button>
-
-                      {layer.type === 'dither' && <Grid3X3 size={13} className="text-purple-400 shrink-0" />}
-                      {layer.type === 'glow' && <Sparkles size={13} className="text-amber-400 shrink-0" />}
-                      {layer.type === 'halftone' && <Circle size={13} className="text-cyan-400 shrink-0" />}
-
-                      <span className="flex-1 truncate font-medium text-[11px]">{layer.name}</span>
-
-                      <span className="text-[9px] text-neutral-600 tabular-nums w-7 text-right shrink-0">
-                        {Math.round(layer.opacity * 100)}%
-                      </span>
-
-                      <div className="flex shrink-0">
-                        <button
-                          onClick={e => { e.stopPropagation(); moveLayer(layer.id, 1); }}
-                          className="p-0.5 text-neutral-600 hover:text-white transition-colors"
-                          title="Move up"
-                        >
-                          <ChevronUp size={12} />
-                        </button>
-                        <button
-                          onClick={e => { e.stopPropagation(); moveLayer(layer.id, -1); }}
-                          className="p-0.5 text-neutral-600 hover:text-white transition-colors"
-                          title="Move down"
-                        >
-                          <ChevronDown size={12} />
-                        </button>
-                        <button
-                          onClick={e => { e.stopPropagation(); removeLayer(layer.id); }}
-                          className="p-0.5 text-neutral-600 hover:text-red-400 transition-colors"
-                          title="Delete"
-                        >
-                          <Trash2 size={12} />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                  <input type="range" className="range-slim cursor-pointer" min={0} max={Math.max(0.001, videoDuration)} step={0.01}
+                    value={Math.min(videoCurrent, Math.max(0.001, videoDuration))}
+                    onChange={e => seekVideo(parseFloat(e.target.value))} />
                 </div>
               </div>
+            </div>
+          )}
 
-              {/* ── SELECTED LAYER ── */}
-              {sel && (
-                <div className="space-y-3 animate-in fade-in">
-                  <h3 className="text-[10px] font-semibold text-neutral-500 uppercase tracking-widest flex items-center gap-1.5">
-                      {sel.type === 'dither' && <Grid3X3 size={10} className="text-purple-400" />}
-                      {sel.type === 'glow' && <Sparkles size={10} className="text-amber-400" />}
-                      {sel.type === 'halftone' && <Circle size={10} className="text-cyan-400" />}
-                    {sel.name}
-                  </h3>
+          {/* Tools */}
+          <div className="border-b border-[#1a1a1a]">
+            <button
+              className="w-full flex items-center justify-between px-4 py-2.5 text-[10px] font-semibold tracking-[0.2em] uppercase text-[#444] hover:text-[#666] transition"
+              onClick={() => setSecTools(v => !v)}
+            >
+              Tools {secTools ? <Minus size={11} /> : <Plus size={11} />}
+            </button>
+            {secTools && (
+              <div className="px-4 pb-3 space-y-1.5">
+                <div className="grid grid-cols-2 gap-1.5">
+                  <ToolBtn active={tool === 'none'} onClick={() => chooseTool('none')} label="View">
+                    <Square size={12} />
+                  </ToolBtn>
+                  <ToolBtn active={tool === 'brush'} onClick={() => chooseTool('brush')} label="Brush">
+                    <Pen size={12} />
+                  </ToolBtn>
+                  <ToolBtn active={tool === 'erase'} onClick={() => chooseTool('erase')} label="Erase">
+                    <Eraser size={12} />
+                  </ToolBtn>
+                  <ToolBtn active={tool === 'select-rect'} onClick={() => chooseTool('select-rect')} label="Rect Sel">
+                    <Grid3X3 size={12} />
+                  </ToolBtn>
+                  <div className="col-span-2">
+                    <ToolBtn active={tool === 'select-ellipse'} onClick={() => chooseTool('select-ellipse')} label="Ellipse Sel">
+                      <Circle size={12} />
+                    </ToolBtn>
+                  </div>
+                </div>
 
-                  {/* Name edit */}
-                  <input
-                    value={sel.name}
-                    onChange={e => patchLayer(sel.id, { name: e.target.value })}
-                    className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-indigo-500"
-                  />
+                <SliderRow label="Brush size" value={brushSize} min={4} max={320} step={1} display={`${brushSize}px`} onChange={setBrushSize} />
 
-                  {/* Blend mode */}
-                  <div className="space-y-1">
-                    <span className="text-[10px] text-neutral-500 uppercase tracking-wider">Blend Mode</span>
-                    <select
-                      value={sel.blendMode}
-                      onChange={e => patchLayer(sel.id, { blendMode: e.target.value as BlendMode })}
-                      className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500"
+                {/* Selection mode */}
+                <div className="flex gap-1 pt-1">
+                  {(['replace','add','subtract'] as SelectionCombine[]).map(m => (
+                    <button key={m}
+                      onClick={() => setSelectionMode(m)}
+                      className={cn('flex-1 rounded text-[10px] py-1 border transition font-medium',
+                        selectionMode === m ? 'bg-white text-black border-white' : 'border-[#222] text-[#555] hover:text-white hover:border-[#444]'
+                      )}
                     >
-                      {BLEND_MODES.map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
-                    </select>
+                      {m === 'replace' ? 'New' : m === 'add' ? 'Add' : 'Sub'}
+                    </button>
+                  ))}
+                </div>
+
+                {hasSelection && (
+                  <div className="flex gap-1.5">
+                    <button onClick={selectAll} className="btn btn-ghost text-[11px] flex-1 py-1">All</button>
+                    <button onClick={clearSelection} className="btn btn-ghost text-[11px] flex-1 py-1">Clear sel.</button>
+                  </div>
+                )}
+
+                {selectedLayer?.useMask && hasSelection && (
+                  <div className="flex gap-1.5">
+                    <button onClick={() => applySelToMask('replace')} className="btn btn-ghost text-[11px] flex-1 py-1">Mask ← sel</button>
+                    <button onClick={() => applySelToMask('subtract')} className="btn btn-ghost text-[11px] flex-1 py-1">Cut mask</button>
+                  </div>
+                )}
+
+                {selectedLayer?.useMask && (
+                  <div className="flex gap-1.5">
+                    <button onClick={clearMask} className="btn btn-ghost text-[11px] flex-1 py-1">Clear mask</button>
+                    <button onClick={fillMask} className="btn btn-ghost text-[11px] flex-1 py-1 gap-1">
+                      <PaintBucket size={11} />Fill mask
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Layers */}
+          <div className="border-b border-[#1a1a1a]">
+            <button
+              className="w-full flex items-center justify-between px-4 py-2.5 text-[10px] font-semibold tracking-[0.2em] uppercase text-[#444] hover:text-[#666] transition"
+              onClick={() => setSecLayers(v => !v)}
+            >
+              <span className="flex items-center gap-2">
+                <Layers size={11} />
+                Layers
+                <span className="tag tag-white">{layers.length}</span>
+              </span>
+              {secLayers ? <Minus size={11} /> : <Plus size={11} />}
+            </button>
+
+            {secLayers && (
+              <div className="pb-2">
+                {/* Add layer buttons */}
+                <div className="flex flex-wrap gap-1 px-4 pb-2">
+                  {([ ['dither','Dither'], ['glow','Glow'], ['halftone','Halftone'], ['lego','LEGO'] ] as [LayerType, string][]).map(([type, label]) => (
+                    <button
+                      key={type}
+                      onClick={() => addLayer(type)}
+                      disabled={!sourceReady}
+                      className="text-[10px] font-medium px-2.5 py-1 rounded border border-[#222] text-[#666] hover:text-white hover:border-[#444] transition disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      + {label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Layer list (reversed = top layer shown first) */}
+                <div className="border-t border-[#1a1a1a]">
+                  {layers.length === 0 ? (
+                    <div className="px-4 py-5 text-center text-[11px] text-[#333]">Load media first</div>
+                  ) : (
+                    [...layers].reverse().map(layer => (
+                      <div
+                        key={layer.id}
+                        draggable
+                        onDragStart={e => handleDragStart(e, layer.id)}
+                        onDragOver={e => handleDragOver(e, layer.id)}
+                        onDragEnd={handleDragEnd}
+                        onClick={() => setSelectedLayerId(layer.id)}
+                        className={cn(
+                          'layer-row group flex items-center gap-2 px-3 py-2 text-[12px] cursor-pointer',
+                          selectedLayerId === layer.id && 'selected',
+                          dragId === layer.id && 'opacity-30'
+                        )}
+                      >
+                        <GripVertical size={12} className="text-[#2a2a2a] shrink-0" />
+
+                        <button
+                          onClick={e => { e.stopPropagation(); patchLayer(layer.id, { enabled: !layer.enabled }); }}
+                          className="shrink-0 text-[#333] hover:text-white transition"
+                        >
+                          {layer.enabled ? <Eye size={12} /> : <EyeOff size={12} />}
+                        </button>
+
+                        <LayerDot type={layer.type} />
+
+                        <span className={cn('flex-1 truncate font-medium', layer.enabled ? 'text-[#ccc]' : 'text-[#444]')}>
+                          {layer.name}
+                        </span>
+
+                        <span className="text-[10px] font-mono text-[#333] w-8 text-right shrink-0">
+                          {Math.round(layer.opacity * 100)}%
+                        </span>
+
+                        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition shrink-0">
+                          <IconBtn onClick={e => { e.stopPropagation(); moveLayer(layer.id, 1); }} title="Move up"><ChevronUp size={11} /></IconBtn>
+                          <IconBtn onClick={e => { e.stopPropagation(); moveLayer(layer.id, -1); }} title="Move down"><ChevronDown size={11} /></IconBtn>
+                          <IconBtn onClick={e => { e.stopPropagation(); removeLayer(layer.id); }} title="Delete">
+                            <Trash2 size={11} className="hover:text-red-400" />
+                          </IconBtn>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Inspector */}
+          {selectedLayer && (
+            <div className="border-b border-[#1a1a1a]">
+              <button
+                className="w-full flex items-center justify-between px-4 py-2.5 text-[10px] font-semibold tracking-[0.2em] uppercase text-[#444] hover:text-[#666] transition"
+                onClick={() => setSecInspect(v => !v)}
+              >
+                Inspector {secInspect ? <Minus size={11} /> : <Plus size={11} />}
+              </button>
+
+              {secInspect && (
+                <div className="px-4 pb-4 space-y-3 fade-in">
+                  {/* Layer name */}
+                  <div className="flex items-center gap-2">
+                    <LayerDot type={selectedLayer.type} />
+                    <input
+                      value={selectedLayer.name}
+                      onChange={e => patchLayer(selectedLayer.id, { name: e.target.value })}
+                      className="field text-[13px]"
+                    />
                   </div>
 
-                  {/* Opacity */}
-                  <Slider
-                    label="Opacity" value={sel.opacity} min={0} max={1} step={0.01}
-                    display={`${Math.round(sel.opacity * 100)}%`}
-                    onChange={v => patchLayer(sel.id, { opacity: v })}
-                  />
+                  {/* Blend + opacity */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <div className="text-[10px] text-[#444] mb-1 font-medium">Blend</div>
+                      <select
+                        value={selectedLayer.blendMode}
+                        onChange={e => patchLayer(selectedLayer.id, { blendMode: e.target.value as BlendMode })}
+                        className="field text-[12px] py-1.5"
+                      >
+                        {BLEND_MODES.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-[#444] mb-1 font-medium">Opacity</div>
+                      <div className="flex items-center gap-2">
+                        <input type="range" className="range-slim cursor-pointer flex-1"
+                          min={0} max={1} step={0.01} value={selectedLayer.opacity}
+                          onChange={e => patchLayer(selectedLayer.id, { opacity: parseFloat(e.target.value) })} />
+                        <span className="text-[11px] font-mono text-[#555] w-8 text-right shrink-0">
+                          {Math.round(selectedLayer.opacity * 100)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
 
                   {/* Mask toggle */}
-                  <label className="flex items-center gap-2 cursor-pointer group">
-                    <input
-                      type="checkbox" checked={sel.useMask}
-                      onChange={e => patchLayer(sel.id, { useMask: e.target.checked })}
-                      className="accent-indigo-500 w-3.5 h-3.5"
-                    />
-                    <span className="text-xs text-neutral-300 group-hover:text-white transition-colors">Use Mask (brush mode)</span>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={selectedLayer.useMask}
+                      onChange={e => patchLayer(selectedLayer.id, { useMask: e.target.checked })}
+                      className="accent-white w-3.5 h-3.5" />
+                    <span className="text-[12px] text-[#666]">Use layer mask</span>
                   </label>
 
-                  {/* Mask brush controls */}
-                  {sel.useMask && (
-                    <div className="space-y-2.5 bg-neutral-800/40 rounded-lg p-3 border border-neutral-800">
-                      <div className="grid grid-cols-2 gap-1.5">
-                        <button
-                          onClick={() => setBrushMode('brush')}
-                          className={cn(
-                            'flex items-center justify-center gap-1.5 py-1.5 rounded text-xs font-medium transition-all',
-                            brushMode === 'brush'
-                              ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20'
-                              : 'bg-neutral-800 text-neutral-400 hover:text-white'
-                          )}
-                        >
-                          <Pen size={12} /> Brush
-                        </button>
-                        <button
-                          onClick={() => setBrushMode('erase')}
-                          className={cn(
-                            'flex items-center justify-center gap-1.5 py-1.5 rounded text-xs font-medium transition-all',
-                            brushMode === 'erase'
-                              ? 'bg-rose-600 text-white shadow-lg shadow-rose-600/20'
-                              : 'bg-neutral-800 text-neutral-400 hover:text-white'
-                          )}
-                        >
-                          <Eraser size={12} /> Erase
-                        </button>
-                      </div>
-                      <Slider
-                        label="Brush Size" value={brushSize} min={5} max={300} step={1}
-                        display={`${brushSize}px`} onChange={setBrushSize}
-                      />
-                      <div className="grid grid-cols-2 gap-1.5">
-                        <button onClick={clearMask} className="py-1.5 bg-neutral-800 hover:bg-neutral-700 text-xs rounded transition-colors text-neutral-400 hover:text-white">
-                          Clear Mask
-                        </button>
-                        <button onClick={fillMask} className="py-1.5 bg-neutral-800 hover:bg-neutral-700 text-xs rounded transition-colors text-neutral-400 hover:text-white flex items-center justify-center gap-1">
-                          <PaintBucket size={11} /> Fill
-                        </button>
+                  <Divider />
+
+                  <SectionLabel>Effect Settings</SectionLabel>
+
+                  {/* ── Dither ── */}
+                  {dither && (
+                    <div className="space-y-3">
+                      <SliderRow label="Pixel Size" value={dither.pixelSize} min={1} max={10} step={1} display={`${dither.pixelSize}x`}
+                        onChange={v => patchSettings(selectedLayer.id, { pixelSize: v })} />
+                      <SliderRow label="Matrix" value={dither.matrixSize} min={2} max={8} step={2} display={`${dither.matrixSize}×${dither.matrixSize}`}
+                        onChange={v => patchSettings(selectedLayer.id, { matrixSize: Math.round(v) === 6 ? 8 : Math.round(v) })} />
+                      <SliderRow label="Brightness" value={dither.brightness} min={-100} max={100} step={1} display={`${dither.brightness}`}
+                        onChange={v => patchSettings(selectedLayer.id, { brightness: v })} />
+                      <SliderRow label="Contrast" value={dither.contrast} min={-100} max={100} step={1} display={`${dither.contrast}`}
+                        onChange={v => patchSettings(selectedLayer.id, { contrast: v })} />
+                      <div className="grid grid-cols-2 gap-3">
+                        <label>
+                          <div className="text-[10px] text-[#444] mb-1">Dark color</div>
+                          <input type="color" value={dither.darkColor}
+                            onChange={e => patchSettings(selectedLayer.id, { darkColor: e.target.value })}
+                            className="w-full h-8 cursor-pointer rounded bg-transparent border border-[#222]" />
+                        </label>
+                        <label>
+                          <div className="text-[10px] text-[#444] mb-1">Light color</div>
+                          <input type="color" value={dither.lightColor}
+                            onChange={e => patchSettings(selectedLayer.id, { lightColor: e.target.value })}
+                            className="w-full h-8 cursor-pointer rounded bg-transparent border border-[#222]" />
+                        </label>
                       </div>
                     </div>
                   )}
 
-                  <div className="border-t border-neutral-800 pt-3">
-                    <span className="text-[10px] text-neutral-500 uppercase tracking-wider">Effect Settings</span>
-                  </div>
+                  {/* ── Glow ── */}
+                  {glow && (
+                    <div className="space-y-3">
+                      <SliderRow label="Blur Radius" value={glow.radius} min={1} max={60} step={1} display={`${glow.radius}px`}
+                        onChange={v => patchSettings(selectedLayer.id, { radius: v })} />
+                      <SliderRow label="Intensity" value={glow.intensity} min={0} max={3} step={0.05} display={glow.intensity.toFixed(2)}
+                        onChange={v => patchSettings(selectedLayer.id, { intensity: v })} />
+                      <SliderRow label="Threshold" value={glow.threshold} min={0} max={255} step={1} display={`${glow.threshold}`}
+                        onChange={v => patchSettings(selectedLayer.id, { threshold: v })} />
+                      <label>
+                        <div className="text-[10px] text-[#444] mb-1">Glow color</div>
+                        <input type="color" value={glow.color}
+                          onChange={e => patchSettings(selectedLayer.id, { color: e.target.value })}
+                          className="w-full h-8 cursor-pointer rounded bg-transparent border border-[#222]" />
+                      </label>
+                    </div>
+                  )}
 
-                  {/* ── DITHER SETTINGS ── */}
-                  {ds && (
-                    <div className="space-y-2.5">
-                      <Slider
-                        label="Pixel Size" value={ds.pixelSize} min={1} max={10} step={1}
-                        display={`${ds.pixelSize}x`}
-                        onChange={v => patchSettings(sel.id, { pixelSize: v })}
-                      />
-                      <Slider
-                        label="Matrix Pattern" value={ds.matrixSize} min={2} max={8} step={2}
-                        display={`${ds.matrixSize}×${ds.matrixSize}`}
-                        onChange={v => {
-                          const val = Math.round(v);
-                          patchSettings(sel.id, { matrixSize: val === 6 ? 8 : val });
-                        }}
-                      />
-                      <Slider
-                        label="Brightness" value={ds.brightness} min={-100} max={100} step={1}
-                        display={`${ds.brightness}`}
-                        onChange={v => patchSettings(sel.id, { brightness: v })}
-                      />
-                      <Slider
-                        label="Contrast" value={ds.contrast} min={-100} max={100} step={1}
-                        display={`${ds.contrast}`}
-                        onChange={v => patchSettings(sel.id, { contrast: v })}
-                      />
-                      <div className="flex gap-3 pt-1">
-                        <div className="flex-1 space-y-1">
-                          <span className="text-[10px] text-neutral-500">Dark</span>
-                          <div className="relative w-full h-8 rounded overflow-hidden border border-neutral-700">
-                            <input type="color" value={ds.darkColor}
-                              onChange={e => patchSettings(sel.id, { darkColor: e.target.value })}
-                              className="absolute -inset-2 w-[calc(100%+16px)] h-[calc(100%+16px)] cursor-pointer"
-                            />
-                          </div>
-                        </div>
-                        <div className="flex-1 space-y-1">
-                          <span className="text-[10px] text-neutral-500">Light</span>
-                          <div className="relative w-full h-8 rounded overflow-hidden border border-neutral-700">
-                            <input type="color" value={ds.lightColor}
-                              onChange={e => patchSettings(sel.id, { lightColor: e.target.value })}
-                              className="absolute -inset-2 w-[calc(100%+16px)] h-[calc(100%+16px)] cursor-pointer"
-                            />
-                          </div>
-                        </div>
+                  {/* ── Halftone ── */}
+                  {halftone && (
+                    <div className="space-y-3">
+                      <SliderRow label="Cell Size" value={halftone.cellSize} min={3} max={30} step={1} display={`${halftone.cellSize}px`}
+                        onChange={v => patchSettings(selectedLayer.id, { cellSize: v })} />
+                      <SliderRow label="Exposure" value={halftone.exposure} min={0.4} max={2.5} step={0.01} display={halftone.exposure.toFixed(2)}
+                        onChange={v => patchSettings(selectedLayer.id, { exposure: v })} />
+                      <SliderRow label="Gamma" value={halftone.gamma} min={0.4} max={2.5} step={0.01} display={halftone.gamma.toFixed(2)}
+                        onChange={v => patchSettings(selectedLayer.id, { gamma: v })} />
+                      <div className="grid grid-cols-2 gap-3">
+                        <label>
+                          <div className="text-[10px] text-[#444] mb-1">Dot color</div>
+                          <input type="color" value={halftone.darkColor}
+                            onChange={e => patchSettings(selectedLayer.id, { darkColor: e.target.value })}
+                            className="w-full h-8 cursor-pointer rounded bg-transparent border border-[#222]" />
+                        </label>
+                        <label>
+                          <div className="text-[10px] text-[#444] mb-1">Background</div>
+                          <input type="color" value={halftone.lightColor}
+                            onChange={e => patchSettings(selectedLayer.id, { lightColor: e.target.value })}
+                            className="w-full h-8 cursor-pointer rounded bg-transparent border border-[#222]" />
+                        </label>
                       </div>
                     </div>
                   )}
 
-                  {/* ── GLOW SETTINGS ── */}
-                  {gs && (
-                    <div className="space-y-2.5">
-                      <Slider
-                        label="Blur Radius" value={gs.radius} min={1} max={60} step={1}
-                        display={`${gs.radius}px`}
-                        onChange={v => patchSettings(sel.id, { radius: v })}
-                      />
-                      <Slider
-                        label="Intensity" value={gs.intensity} min={0} max={3} step={0.05}
-                        display={gs.intensity.toFixed(2)}
-                        onChange={v => patchSettings(sel.id, { intensity: v })}
-                      />
-                      <Slider
-                        label="Threshold" value={gs.threshold} min={0} max={255} step={1}
-                        display={`${gs.threshold}`}
-                        onChange={v => patchSettings(sel.id, { threshold: v })}
-                      />
-                      <div className="space-y-1">
-                        <span className="text-[10px] text-neutral-500">Glow Color</span>
-                        <div className="relative w-full h-8 rounded overflow-hidden border border-neutral-700">
-                          <input type="color" value={gs.color}
-                            onChange={e => patchSettings(sel.id, { color: e.target.value })}
-                            className="absolute -inset-2 w-[calc(100%+16px)] h-[calc(100%+16px)] cursor-pointer"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* ── HALFTONE SETTINGS ── */}
-                  {hs && (
-                    <div className="space-y-2.5">
-                      <Slider
-                        label="Cell Size" value={hs.cellSize} min={3} max={30} step={1}
-                        display={`${hs.cellSize}px`}
-                        onChange={v => patchSettings(sel.id, { cellSize: v })}
-                      />
-                      <Slider
-                        label="Exposure" value={hs.exposure} min={0.4} max={2.5} step={0.01}
-                        display={hs.exposure.toFixed(2)}
-                        onChange={v => patchSettings(sel.id, { exposure: v })}
-                      />
-                      <Slider
-                        label="Gamma" value={hs.gamma} min={0.4} max={2.5} step={0.01}
-                        display={hs.gamma.toFixed(2)}
-                        onChange={v => patchSettings(sel.id, { gamma: v })}
-                      />
-                      <div className="flex gap-3 pt-1">
-                        <div className="flex-1 space-y-1">
-                          <span className="text-[10px] text-neutral-500">Dot Color</span>
-                          <div className="relative w-full h-8 rounded overflow-hidden border border-neutral-700">
-                            <input type="color" value={hs.darkColor}
-                              onChange={e => patchSettings(sel.id, { darkColor: e.target.value })}
-                              className="absolute -inset-2 w-[calc(100%+16px)] h-[calc(100%+16px)] cursor-pointer"
-                            />
-                          </div>
-                        </div>
-                        <div className="flex-1 space-y-1">
-                          <span className="text-[10px] text-neutral-500">Background</span>
-                          <div className="relative w-full h-8 rounded overflow-hidden border border-neutral-700">
-                            <input type="color" value={hs.lightColor}
-                              onChange={e => patchSettings(sel.id, { lightColor: e.target.value })}
-                              className="absolute -inset-2 w-[calc(100%+16px)] h-[calc(100%+16px)] cursor-pointer"
-                            />
-                          </div>
-                        </div>
-                      </div>
+                  {/* ── LEGO ── */}
+                  {lego && (
+                    <div className="space-y-3">
+                      <SliderRow label="Brick Size" value={lego.brickSize} min={6} max={48} step={1} display={`${lego.brickSize}px`}
+                        onChange={v => patchSettings(selectedLayer.id, { brickSize: v })} />
+                      <SliderRow label="Saturation" value={lego.saturation} min={0} max={3} step={0.05} display={lego.saturation.toFixed(2)}
+                        onChange={v => patchSettings(selectedLayer.id, { saturation: v })} />
+                      <SliderRow label="Brightness" value={lego.brightness} min={-80} max={80} step={1} display={`${lego.brightness > 0 ? '+' : ''}${lego.brightness}`}
+                        onChange={v => patchSettings(selectedLayer.id, { brightness: v })} />
+                      <SliderRow label="Stud Opacity" value={lego.studOpacity} min={0} max={1} step={0.01} display={`${Math.round(lego.studOpacity * 100)}%`}
+                        onChange={v => patchSettings(selectedLayer.id, { studOpacity: v })} />
+                      <SliderRow label="Color Quantize" value={lego.quantize} min={2} max={64} step={1} display={`${lego.quantize}`}
+                        onChange={v => patchSettings(selectedLayer.id, { quantize: v })} />
+                      <SliderRow label="Border Width" value={lego.borderWidth} min={0} max={4} step={0.5} display={lego.borderWidth.toFixed(1)}
+                        onChange={v => patchSettings(selectedLayer.id, { borderWidth: v })} />
                     </div>
                   )}
                 </div>
               )}
+            </div>
+          )}
 
-              {/* Download */}
+        </div>
+      </aside>
+
+      {/* ── Main canvas area ── */}
+      <main className="flex flex-1 flex-col overflow-hidden">
+
+        {/* Top bar */}
+        <div className="flex items-center justify-between px-5 h-[49px] border-b border-[#1a1a1a] shrink-0">
+          <div className="flex items-center gap-2">
+            {layers.filter(l => l.enabled).length > 0 && (
+              <span className="tag tag-white">
+                {layers.filter(l => l.enabled).length} / {layers.length} layers active
+              </span>
+            )}
+            {hasSelection && <span className="tag tag-white">Selection active</span>}
+            {sourceHasAlpha && <span className="tag tag-white">Alpha aware</span>}
+            {canPaint && (
+              <span className="tag tag-inv">
+                {tool === 'brush' ? 'Painting mask' : 'Erasing mask'}
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            {sourceKind === 'video' && (
               <button
-                onClick={download}
-                className="flex items-center justify-center gap-2 w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors text-sm font-medium"
+                onClick={exportVideo}
+                disabled={!sourceReady || isRecording}
+                className="btn btn-ghost text-[12px] disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                <Download size={15} /> Save Result
+                <Film size={13} />
+                {isRecording ? 'Recording…' : 'Export WebM'}
               </button>
-            </>
+            )}
+            <button
+              onClick={downloadFrame}
+              disabled={!sourceReady}
+              className="btn btn-solid text-[12px] disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <Download size={13} />
+              Save PNG
+            </button>
+          </div>
+        </div>
+
+        {/* Canvas */}
+        <div className="relative flex flex-1 items-center justify-center canvas-grid overflow-hidden">
+
+          {!sourceReady ? (
+            /* Empty state */
+            <div className="flex flex-col items-center gap-5 text-center px-8 fade-in">
+              <div className="logo-text text-[64px] leading-none tracking-[-0.05em] text-[#1a1a1a]">.eana</div>
+              <div className="text-[#333] text-[13px] max-w-[320px] leading-relaxed">
+                Open an image or video to start. Stack effects as layers, paint masks, select regions, and export.
+              </div>
+              <label className="btn btn-solid text-[13px] px-5 py-2.5 cursor-pointer">
+                <Upload size={15} />
+                Open file
+                <input type="file" className="hidden" accept="image/*,video/*" onChange={handleUpload} />
+              </label>
+              <div className="flex flex-wrap justify-center gap-1.5 mt-2">
+                {['Dither','Glow','Halftone','LEGO','Video','PNG alpha'].map(f => (
+                  <span key={f} className="tag tag-white">{f}</span>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="relative max-h-full max-w-full">
+              {/* checkerboard container */}
+              <div className="checkerboard-bg relative overflow-hidden border border-[#1a1a1a] shadow-[0_8px_40px_rgba(0,0,0,0.8)]">
+                <canvas ref={displayRef} className="block h-auto max-h-[calc(100vh-100px)] w-auto max-w-full" />
+                <canvas
+                  ref={overlayRef}
+                  onPointerDown={handlePointerDown}
+                  onPointerMove={handlePointerMove}
+                  onPointerUp={handlePointerUp}
+                  onPointerCancel={handlePointerUp}
+                  className="absolute inset-0 block h-auto max-h-[calc(100vh-100px)] w-auto max-w-full"
+                  style={{ cursor, touchAction: 'none' }}
+                />
+              </div>
+
+              {/* size badge */}
+              <div className="absolute bottom-2 right-2 tag tag-white opacity-60">
+                {mediaSize.width} × {mediaSize.height}
+              </div>
+            </div>
           )}
         </div>
-      </div>
+      </main>
 
-      {/* ═══ CANVAS ═══ */}
-      <div className="flex-1 flex flex-col items-center justify-center p-4 md:p-8 relative overflow-hidden bg-neutral-950 pattern-grid">
-        {!imageSrc ? (
-          <div className="flex flex-col items-center justify-center text-neutral-500 max-w-sm text-center">
-            <div className="w-16 h-16 mb-5 bg-neutral-900 rounded-full flex items-center justify-center border border-neutral-800">
-              <Brush size={28} className="text-neutral-600" />
-            </div>
-            <h2 className="text-lg font-medium text-neutral-300 mb-1">No image loaded</h2>
-            <p className="text-xs leading-relaxed">Upload a photo to start. Apply layered dithering and glow effects, paint masks with the brush tool, and blend layers like in Photoshop.</p>
-          </div>
-        ) : (
-          <div
-            className="relative shadow-2xl shadow-black/60 border border-neutral-800 bg-neutral-900 rounded-md overflow-hidden"
-            style={{ maxHeight: '100%', maxWidth: '100%', touchAction: 'none' }}
-          >
-            <canvas
-              ref={displayRef}
-              onPointerDown={onDown}
-              onPointerMove={onMove}
-              onPointerUp={onUp}
-              onPointerCancel={onUp}
-              className="w-auto h-auto max-w-full max-h-[85vh] object-contain block"
-              style={{ cursor: canPaint ? 'crosshair' : 'default' }}
-            />
-
-            {/* Floating status */}
-            {canPaint && (
-              <div className="absolute top-3 left-3 bg-black/70 backdrop-blur-sm text-white px-3 py-1.5 rounded-full text-[10px] font-medium flex items-center gap-1.5 pointer-events-none border border-white/10">
-                {brushMode === 'brush' ? <Pen size={10} /> : <Eraser size={10} />}
-                {brushMode === 'brush' ? 'Paint to reveal effect' : 'Erase effect area'}
-              </div>
-            )}
-
-            {/* Layer count badge */}
-            <div className="absolute bottom-3 right-3 bg-black/70 backdrop-blur-sm text-neutral-400 px-2 py-1 rounded text-[9px] pointer-events-none border border-white/5">
-              {layers.filter(l => l.enabled).length} / {layers.length} layers
-            </div>
-          </div>
-        )}
-      </div>
-
-      <style>{`
-        .pattern-grid {
-          background-image:
-            linear-gradient(to right, rgba(255,255,255,.02) 1px, transparent 1px),
-            linear-gradient(to bottom, rgba(255,255,255,.02) 1px, transparent 1px);
-          background-size: 20px 20px;
-        }
-        @keyframes fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
-        .animate-in { animation: fade-in .15s ease-out; }
-      `}</style>
+      <video ref={hiddenVideoRef} className="hidden" playsInline muted />
     </div>
   );
 }

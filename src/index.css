@@ -1,1 +1,278 @@
 @import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  font-family: 'Space Grotesk', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  background: #000;
+}
+
+html, body, #root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #000;
+  color: #fff;
+  overflow: hidden;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button, input, select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+/* ── Subtle noise texture on panels ── */
+.panel-bg {
+  background: #0a0a0a;
+  border: 1px solid #222;
+}
+
+.panel-bg-2 {
+  background: #111;
+  border: 1px solid #1e1e1e;
+}
+
+/* ── Grid pattern for canvas background ── */
+.canvas-grid {
+  background-color: #080808;
+  background-image:
+    linear-gradient(to right, #161616 1px, transparent 1px),
+    linear-gradient(to bottom, #161616 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* ── Checkerboard for transparent images ── */
+.checkerboard-bg {
+  background-color: #101010;
+  background-image:
+    linear-gradient(45deg, #1a1a1a 25%, transparent 25%),
+    linear-gradient(-45deg, #1a1a1a 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #1a1a1a 75%),
+    linear-gradient(-45deg, transparent 75%, #1a1a1a 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+/* ── Scrollbar ── */
+.surface-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #2a2a2a transparent;
+}
+
+.surface-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+
+.surface-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.surface-scroll::-webkit-scrollbar-thumb {
+  background: #2a2a2a;
+  border-radius: 9999px;
+}
+
+.surface-scroll::-webkit-scrollbar-thumb:hover {
+  background: #3a3a3a;
+}
+
+/* ── Range slider ── */
+.range-slim {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 2px;
+  background: #2a2a2a;
+  border-radius: 9999px;
+  outline: none;
+  width: 100%;
+}
+
+.range-slim::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: #fff;
+  border: 2px solid #000;
+  box-shadow: 0 0 0 1px #555;
+  cursor: pointer;
+  transition: box-shadow 0.15s;
+}
+
+.range-slim::-webkit-slider-thumb:hover {
+  box-shadow: 0 0 0 3px #333;
+}
+
+.range-slim::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: #fff;
+  border: 2px solid #000;
+  box-shadow: 0 0 0 1px #555;
+  cursor: pointer;
+}
+
+/* ── Logo text ── */
+.logo-text {
+  font-family: 'Space Grotesk', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  color: #fff;
+}
+
+/* ── Divider ── */
+.divider {
+  border: none;
+  border-top: 1px solid #1e1e1e;
+  margin: 0;
+}
+
+/* ── Tag / badge ── */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  border-radius: 3px;
+  padding: 2px 7px;
+}
+
+.tag-white {
+  color: #fff;
+  border: 1px solid #333;
+  background: #111;
+}
+
+.tag-inv {
+  color: #000;
+  background: #fff;
+}
+
+/* ── Button base ── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  padding: 7px 14px;
+  border: 1px solid transparent;
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: #2a2a2a;
+  color: #aaa;
+}
+
+.btn-ghost:hover {
+  background: #161616;
+  border-color: #3a3a3a;
+  color: #fff;
+}
+
+.btn-solid {
+  background: #fff;
+  border-color: #fff;
+  color: #000;
+}
+
+.btn-solid:hover {
+  background: #e0e0e0;
+  border-color: #e0e0e0;
+}
+
+.btn-active {
+  background: #fff;
+  border-color: #fff;
+  color: #000;
+}
+
+/* ── Layer row ── */
+.layer-row {
+  border-left: 2px solid transparent;
+  transition: border-color 0.1s, background 0.1s;
+}
+
+.layer-row:hover {
+  background: #111;
+}
+
+.layer-row.selected {
+  border-left-color: #fff;
+  background: #141414;
+}
+
+/* ── Input / select ── */
+.field {
+  background: #0d0d0d;
+  border: 1px solid #222;
+  border-radius: 4px;
+  color: #fff;
+  outline: none;
+  transition: border-color 0.12s;
+  width: 100%;
+  padding: 7px 10px;
+  font-size: 13px;
+}
+
+.field:focus {
+  border-color: #555;
+}
+
+/* ── Section label ── */
+.section-label {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: #444;
+  margin-bottom: 8px;
+}
+
+/* ── Subtle scanline on canvas area ── */
+.scanlines::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.06) 2px,
+    rgba(0, 0, 0, 0.06) 4px
+  );
+  border-radius: inherit;
+}
+
+/* ── Marching ants color override for BW ── */
+@keyframes march {
+  to { stroke-dashoffset: -28; }
+}
+
+/* ── Fade in ── */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.fade-in {
+  animation: fadeIn 0.2s ease forwards;
+}
